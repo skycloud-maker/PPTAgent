@@ -4,6 +4,11 @@ PPTAgent — Streamlit 앱 진입점
 FRONTEND.md의 4단계 위자드 구조 구현
 """
 
+import sys, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+
+
 import streamlit as st
 
 st.set_page_config(
