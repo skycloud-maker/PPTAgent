@@ -1,0 +1,32 @@
+# 환경변수 (절대 커밋 금지)
+.env
+
+# 생성된 파일 (서버 저장 금지 정책)
+*.pptx
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+
+# uv
+.venv/
+uv.lock
+
+# 임시 파일
+tmp/
+temp/
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
