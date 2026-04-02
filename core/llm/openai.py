@@ -1,4 +1,4 @@
-"""Claude adapter for slide planning."""
+"""OpenAI adapter for slide planning."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import logging
 import os
 import time
 
-import anthropic
 from dotenv import load_dotenv
+from openai import APIConnectionError, APIStatusError, AuthenticationError, OpenAI, RateLimitError
 from pydantic import ValidationError
 
 from core.llm.interface import LLMInterface
@@ -20,20 +20,19 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
-TIMEOUT_SECONDS = 30
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "gpt-5-mini"
 
 
-class ClaudeAdapter(LLMInterface):
-    """Plan slide schemas by calling the Anthropic Messages API."""
+class OpenAIAdapter(LLMInterface):
+    """Plan slide schemas by calling the OpenAI Responses API."""
 
     def __init__(self) -> None:
-        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        if not api_key or api_key == "sk-ant-your-real-key":
-            raise ValueError("Anthropic API 키가 설정되지 않았습니다. .env 파일의 ANTHROPIC_API_KEY를 실제 키로 바꿔주세요.")
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key or api_key == "your_openai_api_key_here":
+            raise ValueError("OpenAI API 키가 설정되지 않았습니다. .env 파일의 OPENAI_API_KEY를 실제 키로 바꿔주세요.")
 
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        self.client = OpenAI(api_key=api_key)
+        self.model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     def plan_slides(
         self,
@@ -46,38 +45,39 @@ class ClaudeAdapter(LLMInterface):
         for attempt in range(MAX_RETRIES + 1):
             try:
                 started_at = time.time()
-                response = self.client.messages.create(
+                response = self.client.responses.create(
                     model=self.model,
-                    max_tokens=4096,
-                    timeout=TIMEOUT_SECONDS,
-                    messages=[{"role": "user", "content": prompt}],
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": prompt}],
+                        }
+                    ],
                 )
                 elapsed = round(time.time() - started_at, 2)
-                usage = response.usage
                 logger.info(
-                    "Claude slide plan completed | model=%s | tokens=%s | elapsed=%ss | attempt=%s",
+                    "OpenAI slide plan completed | model=%s | elapsed=%ss | attempt=%s",
                     self.model,
-                    usage.input_tokens + usage.output_tokens,
                     elapsed,
                     attempt + 1,
                 )
-                return self._parse_response(response)
-            except anthropic.AuthenticationError:
-                raise RuntimeError("Anthropic 인증에 실패했습니다. .env의 ANTHROPIC_API_KEY가 올바른지 확인해주세요.")
-            except anthropic.APITimeoutError:
-                logger.warning("Claude API timeout | attempt=%s", attempt + 1)
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY_SECONDS)
-                    continue
-                raise RuntimeError("슬라이드 구조 생성이 지연되고 있습니다. 잠시 후 다시 시도해주세요.")
-            except anthropic.RateLimitError:
-                logger.warning("Claude API rate limit | attempt=%s", attempt + 1)
+                return self._parse_response(response.output_text)
+            except AuthenticationError:
+                raise RuntimeError("OpenAI 인증에 실패했습니다. .env의 OPENAI_API_KEY가 올바른지 확인해주세요.")
+            except RateLimitError:
+                logger.warning("OpenAI rate limit | attempt=%s", attempt + 1)
                 if attempt < MAX_RETRIES:
                     time.sleep(10)
                     continue
                 raise RuntimeError("요청이 많아 잠시 대기 중입니다. 잠시 후 다시 시도해주세요.")
-            except anthropic.APIError as exc:
-                logger.error("Claude API error | type=%s | attempt=%s", type(exc).__name__, attempt + 1)
+            except APIConnectionError:
+                logger.warning("OpenAI connection error | attempt=%s", attempt + 1)
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+                raise RuntimeError("OpenAI API 연결에 실패했습니다. 네트워크 상태를 확인해주세요.")
+            except APIStatusError as exc:
+                logger.error("OpenAI status error | status=%s | attempt=%s", exc.status_code, attempt + 1)
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY_SECONDS)
                     continue
@@ -85,14 +85,8 @@ class ClaudeAdapter(LLMInterface):
 
         raise RuntimeError("슬라이드 구조 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
 
-    def _parse_response(self, response: anthropic.types.Message) -> SlideSchema:
-        text_blocks: list[str] = []
-        for block in response.content:
-            block_text = getattr(block, "text", None)
-            if block_text:
-                text_blocks.append(block_text)
-
-        text = "\n".join(text_blocks).strip()
+    def _parse_response(self, text: str) -> SlideSchema:
+        text = text.strip()
         if "```json" in text:
             text = text.split("```json", 1)[1].split("```", 1)[0].strip()
         elif text.startswith("```"):
@@ -107,4 +101,5 @@ class ClaudeAdapter(LLMInterface):
 
     def _build_prompt(self, user_request: str, template: str, data: dict | None) -> str:
         from core.prompts.slide_planner import build_prompt
+
         return build_prompt(user_request, template, data)

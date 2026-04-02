@@ -1,65 +1,100 @@
 # PPTAgent
 
-AI가 자연어 요청을 받아 회사용 PPT(.pptx)를 자동 생성하는 도구입니다.
+회사 내부 발표 자료 작성을 위한 AI PPT 생성 에이전트입니다. 현재 MVP는 회사 전용 템플릿 기반의 보고서와 기획서 생성을 우선 목표로 합니다.
+
+## 현재 상태
+
+- Streamlit 4단계 생성 흐름 구현
+- OpenAI 기반 슬라이드 기획
+- Pydantic `SlideSchema` 검증
+- `python-pptx` 기반 회사 전용 템플릿 렌더링
+- harness/eval용 샘플 케이스 추가
 
 ## 빠른 시작
 
-### 1. 설치
+### 1. 환경 변수 설정
 
-```bash
-# uv 설치 (없는 경우)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 프로젝트 클론 후
-cd PPTAgent
-uv sync
+```bat
+copy .env.example .env
 ```
 
-### 2. 환경변수 설정
+`.env`에 최소한 아래 값을 채워주세요.
 
-```bash
-cp .env.example .env
-# .env 파일을 열어 ANTHROPIC_API_KEY 입력
+- `OPENAI_API_KEY`
+- 필요 시 `PPTAGENT_COMPANY_NAME`
+- 필요 시 `PPTAGENT_LOGO_PATH`
+
+### 2. 더블클릭 실행
+
+앱 실행:
+
+```bat
+run_app.bat
 ```
 
-### 3. 실행
+Harness 케이스 확인:
 
-```bash
-uv run streamlit run app.py
+```bat
+run_harness.bat
 ```
 
-브라우저에서 `http://localhost:8501` 접속
+배치 파일이 자동으로 다음을 수행합니다.
+
+- `C:\codex\python312\python.exe` 사용
+- 필요한 패키지 설치
+- Streamlit 앱 또는 harness 실행
+
+## 수동 실행
+
+```bat
+C:\codex\python312\python.exe -m pip install -r requirements.txt
+C:\codex\python312\python.exe -m streamlit run app.py
+```
+
+브라우저에서 `http://localhost:8501`로 접속합니다.
 
 ## 프로젝트 구조
 
-```
+```text
 PPTAgent/
-├── app.py                  # Streamlit 진입점
+├── app.py
+├── requirements.txt
+├── run_app.bat
+├── run_harness.bat
 ├── core/
-│   ├── schema.py           # SlideSchema (Pydantic)
-│   ├── renderer.py         # python-pptx 렌더러
 │   ├── llm/
-│   │   ├── interface.py    # LLM 추상화 인터페이스
-│   │   └── claude.py       # Claude API 어댑터
-│   └── prompts/
-│       └── slide_planner.py # 슬라이드 기획 프롬프트
-├── templates/              # 템플릿 정의 (Phase 3)
-├── docs/                   # 하네스 문서
+│   │   ├── __init__.py
+│   │   ├── interface.py
+│   │   ├── openai.py
+│   │   └── claude.py
+│   ├── prompts/
+│   │   └── slide_planner.py
+│   ├── renderer.py
+│   └── schema.py
+├── docs/
+├── harness/
+│   ├── cases/
+│   ├── expected/
+│   └── run_manual_eval.py
 ├── .env.example
 └── pyproject.toml
 ```
 
-## 하네스 문서
+## 회사 전용 템플릿 방향
 
-이 프로젝트는 하네스 엔지니어링 방식으로 개발됩니다.  
-AI와 작업할 때는 아래 3개 문서를 항상 첨부하세요:
+이 프로젝트는 장기적으로 범용화할 수 있지만, 현재 우선순위는 회사 내부 보고 자료 생성입니다.
 
-- `AGENTS.md` — AI 행동 규칙
-- `ARCHITECTURE.md` — 시스템 구조
-- `docs/PLANS.md` — 현재 진행 상황
+- 외부 브랜드 다운로드에 의존하지 않음
+- 로고는 로컬 경로나 미설정 상태를 지원
+- 헤더, 푸터, 기밀 문구가 포함된 내부 문서 톤 유지
+- 주간보고, 프로젝트 현황, 제안서, 데이터 리포트 중심 설계
 
-## 현재 개발 단계
+## Harness / Eval
 
-- [x] Phase 1-A: 프로젝트 기본 구조 세팅
-- [ ] Phase 2-A: Streamlit 앱 기본 구조 + 진행 바
-- [ ] Phase 2-B ~ 2-F: MVP 핵심 기능
+`harness/` 아래에 샘플 입력과 검토 기준을 추가했습니다.
+
+```bat
+run_harness.bat
+```
+
+API 키가 없는 상태에서도 케이스와 검토 포인트를 확인할 수 있습니다.

@@ -1,0 +1,16 @@
+{
+  "id": "project_status_exec_review",
+  "template": "project_status",
+  "user_input": {
+    "project_name": "PPTAgent",
+    "period": "2026.04 ~ 2026.06",
+    "goal": "회사 내부 발표자료 자동화에 필요한 MVP를 구축한다.",
+    "progress": "- 템플릿 선택/입력/미리보기/다운로드 플로우 연결\n- Claude 기반 슬라이드 기획 연결\n- 회사 전용 렌더러 구조 정리",
+    "risks": "- 원본 브랜드 템플릿 부재\n- 실제 사용자의 보고 스타일 편차 존재"
+  },
+  "expectations": [
+    "표지 이후에 프로젝트 목표나 개요 슬라이드가 있어야 한다.",
+    "진행 현황과 남은 과제가 분리되어 표현되어야 한다.",
+    "경영진이 빠르게 이해할 수 있는 요약 구조여야 한다."
+  ]
+}
