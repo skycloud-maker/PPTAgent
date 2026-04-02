@@ -4,9 +4,26 @@ PPTAgent — Streamlit 앱 진입점
 FRONTEND.md의 4단계 위자드 구조 구현
 """
 
+import os
 import sys, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+
+# 런타임 전체를 UTF-8로 유도 (Streamlit/서드파티가 stdout을 사용할 때 방어)
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+def _wrap_utf8(stream):
+    # 이미 UTF-8이면 중복 래핑 방지
+    enc = getattr(stream, "encoding", None)
+    if enc and enc.lower() == "utf-8":
+        return stream
+    # buffer가 있으면 UTF-8 wrapper로 감싸고, 인코딩 불가 문자는 대체
+    buf = getattr(stream, "buffer", None)
+    if buf is not None:
+        return io.TextIOWrapper(buf, encoding="utf-8", errors="replace")
+    return stream
+
+sys.stdout = _wrap_utf8(sys.stdout)
+sys.stderr = _wrap_utf8(sys.stderr)
 
 
 import streamlit as st
@@ -241,7 +258,7 @@ def render_step_3() -> None:
                 st.session_state.slide_schema = schema
                 st.rerun()
             except Exception as e:
-                st.error(str(e))
+                st.error(repr(e))
                 if st.button("다시 시도"):
                     st.rerun()
                 return
@@ -294,7 +311,9 @@ def render_step_4() -> None:
                 st.rerun()
             return
 
-    file_name = f"{schema.meta.title}.pptx"
+    safe_title = re.sub(r'[\\/:*?"<>|]+', "_", str(schema.meta.title or "PPTAgent"))
+    file_name = f"{safe_title}.pptx"
+
     st.download_button(
         label="⬇️ 다운로드",
         data=pptx_bytes,
