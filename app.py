@@ -21,11 +21,7 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
 SUPPORTED_UPLOAD_TYPES = ("csv", "json")
 
-st.set_page_config(
-    page_title="PPTAgent",
-    page_icon="📊",
-    layout="wide",
-)
+st.set_page_config(page_title="PPTAgent", page_icon="📊", layout="wide")
 
 TEMPLATES: list[dict[str, str]] = [
     {"id": "weekly_report", "icon": "📅", "name": "주간/월간 업무 보고"},
@@ -88,7 +84,7 @@ def render_progress_bar(current_step: int) -> None:
     st.divider()
 
 
-def render_step_navigation(current_step: int) -> None:
+def render_step_navigation() -> None:
     st.caption("단계 이동")
     cols = st.columns(4)
     steps = [(1, "템플릿"), (2, "내용 입력"), (3, "구조 확인"), (4, "완료")]
@@ -126,24 +122,14 @@ def parse_uploaded_file(uploaded_file: Any) -> dict[str, Any] | None:
         else:
             columns = []
             rows = 0
-        return {
-            "file_name": uploaded_file.name,
-            "file_type": "json",
-            "rows": rows,
-            "columns": columns[:20],
-        }
+        return {"file_name": uploaded_file.name, "file_type": "json", "rows": rows, "columns": columns[:20]}
 
     if suffix == "csv":
         text = raw.decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(text))
         fieldnames = reader.fieldnames or []
         rows = sum(1 for _ in reader)
-        return {
-            "file_name": uploaded_file.name,
-            "file_type": "csv",
-            "rows": rows,
-            "columns": fieldnames[:20],
-        }
+        return {"file_name": uploaded_file.name, "file_type": "csv", "rows": rows, "columns": fieldnames[:20]}
 
     raise ValueError(f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(SUPPORTED_UPLOAD_TYPES)}")
 
@@ -206,45 +192,13 @@ def get_layout_hint(slide: Slide) -> str:
 def render_wireframe(slide: Slide) -> None:
     slide_type = slide.type.value
     if slide_type == "title":
-        html = """
-        <div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;overflow:hidden'>
-          <div style='height:24%;background:#a50034'></div>
-          <div style='padding:20px 24px'>
-            <div style='height:28px;background:#ececec;border-radius:6px;width:72%;margin-bottom:16px'></div>
-            <div style='height:16px;background:#f2f2f2;border-radius:6px;width:48%;margin-bottom:50px'></div>
-            <div style='height:12px;background:#f2f2f2;border-radius:6px;width:22%;margin-left:auto'></div>
-          </div>
-        </div>
-        """
+        html = "<div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;overflow:hidden'><div style='height:24%;background:#a50034'></div><div style='padding:20px 24px'><div style='height:28px;background:#ececec;border-radius:6px;width:72%;margin-bottom:16px'></div><div style='height:16px;background:#f2f2f2;border-radius:6px;width:48%;margin-bottom:50px'></div><div style='height:12px;background:#f2f2f2;border-radius:6px;width:22%;margin-left:auto'></div></div></div>"
     elif slide_type == "section":
-        html = """
-        <div style='display:flex;border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;overflow:hidden'>
-          <div style='width:34%;background:#a50034'></div>
-          <div style='flex:1;padding:28px'>
-            <div style='height:24px;background:#ececec;border-radius:6px;width:58%;margin-top:65px'></div>
-          </div>
-        </div>
-        """
+        html = "<div style='display:flex;border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;overflow:hidden'><div style='width:34%;background:#a50034'></div><div style='flex:1;padding:28px'><div style='height:24px;background:#ececec;border-radius:6px;width:58%;margin-top:65px'></div></div></div>"
     elif slide_type == "two_column":
-        html = """
-        <div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;padding:18px'>
-          <div style='height:20px;background:#ececec;border-radius:6px;width:34%;margin-bottom:18px'></div>
-          <div style='display:flex;height:150px'>
-            <div style='flex:1;background:#fafafa;border-radius:8px'></div>
-            <div style='width:8px'></div>
-            <div style='width:1px;background:#d9d9d9'></div>
-            <div style='width:8px'></div>
-            <div style='flex:1;background:#fafafa;border-radius:8px'></div>
-          </div>
-        </div>
-        """
+        html = "<div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;padding:18px'><div style='height:20px;background:#ececec;border-radius:6px;width:34%;margin-bottom:18px'></div><div style='display:flex;height:150px'><div style='flex:1;background:#fafafa;border-radius:8px'></div><div style='width:8px'></div><div style='width:1px;background:#d9d9d9'></div><div style='width:8px'></div><div style='flex:1;background:#fafafa;border-radius:8px'></div></div></div>"
     else:
-        html = """
-        <div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;padding:18px'>
-          <div style='height:20px;background:#ececec;border-radius:6px;width:34%;margin-bottom:18px'></div>
-          <div style='height:148px;background:#fafafa;border-radius:10px'></div>
-        </div>
-        """
+        html = "<div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;padding:18px'><div style='height:20px;background:#ececec;border-radius:6px;width:34%;margin-bottom:18px'></div><div style='height:148px;background:#fafafa;border-radius:10px'></div></div>"
     st.markdown(html, unsafe_allow_html=True)
 
 
@@ -256,12 +210,7 @@ def render_step_1() -> None:
     for index, template in enumerate(TEMPLATES):
         with cols[index % 2]:
             selected = st.session_state.selected_template == template["id"]
-            if st.button(
-                f"{template['icon']} {template['name']}",
-                key=f"template_{template['id']}",
-                type="primary" if selected else "secondary",
-                use_container_width=True,
-            ):
+            if st.button(f"{template['icon']} {template['name']}", key=f"template_{template['id']}", type="primary" if selected else "secondary", use_container_width=True):
                 st.session_state.selected_template = template["id"]
                 st.rerun()
 
@@ -302,39 +251,97 @@ def render_step_2() -> None:
     with left:
         if template == "weekly_report":
             inputs["period"] = st.text_input("보고 기간 *", value=st.session_state.user_input.get("period", ""), placeholder="예: 2026년 4월 1주차")
-            inputs["done"] = st.text_area("이번 기간 주요 업무 *", value=st.session_state.user_input.get("done", ""), height=160)
-            inputs["plan"] = st.text_area("다음 기간 계획 *", value=st.session_state.user_input.get("plan", ""), height=140)
-            inputs["issues"] = st.text_area("이슈 / 특이사항", value=st.session_state.user_input.get("issues", ""), height=120)
+            inputs["done"] = st.text_area(
+                "이번 기간 주요 업무 *",
+                value=st.session_state.user_input.get("done", ""),
+                height=160,
+                placeholder="예:\n- VoC 대시보드 구조 정리\n- 발표자료 초안 작성\n- 내부 검토 의견 반영",
+            )
+            inputs["plan"] = st.text_area(
+                "다음 기간 계획 *",
+                value=st.session_state.user_input.get("plan", ""),
+                height=140,
+                placeholder="예:\n- UI 수정안 반영\n- 템플릿 고도화\n- 사용자 피드백 수집",
+            )
+            inputs["issues"] = st.text_area(
+                "이슈 / 특이사항",
+                value=st.session_state.user_input.get("issues", ""),
+                height=120,
+                placeholder="예: API 비용 이슈, 브랜드 템플릿 원본 부재, 일정 지연 가능성",
+            )
             required = ["period", "done", "plan"]
         elif template == "project_status":
-            inputs["project_name"] = st.text_input("프로젝트명 *", value=st.session_state.user_input.get("project_name", ""))
+            inputs["project_name"] = st.text_input("프로젝트명 *", value=st.session_state.user_input.get("project_name", ""), placeholder="예: PPTAgent")
             inputs["period"] = st.text_input("프로젝트 기간 *", value=st.session_state.user_input.get("period", ""), placeholder="예: 2026.04 ~ 2026.06")
-            inputs["goal"] = st.text_area("프로젝트 목표 *", value=st.session_state.user_input.get("goal", ""), height=120)
-            inputs["progress"] = st.text_area("현재 진행 현황 *", value=st.session_state.user_input.get("progress", ""), height=160)
-            inputs["risks"] = st.text_area("리스크 / 대응 계획", value=st.session_state.user_input.get("risks", ""), height=120)
+            inputs["goal"] = st.text_area(
+                "프로젝트 목표 *",
+                value=st.session_state.user_input.get("goal", ""),
+                height=120,
+                placeholder="예: 회사 내부 발표자료 제작 시간을 줄이는 AI Agent MVP 구축",
+            )
+            inputs["progress"] = st.text_area(
+                "현재 진행 현황 *",
+                value=st.session_state.user_input.get("progress", ""),
+                height=160,
+                placeholder="예:\n- Step 기반 UI 연결 완료\n- OpenAI 연동 전환 진행 중\n- 렌더러 회사 전용 테마 반영",
+            )
+            inputs["risks"] = st.text_area(
+                "리스크 / 대응 계획",
+                value=st.session_state.user_input.get("risks", ""),
+                height=120,
+                placeholder="예: API 크레딧 부족 가능성, 실제 사용자 요구 반영 필요",
+            )
             required = ["project_name", "period", "goal", "progress"]
         elif template == "proposal":
-            inputs["background"] = st.text_area("제안 배경 / 문제 정의 *", value=st.session_state.user_input.get("background", ""), height=140)
-            inputs["solution"] = st.text_area("핵심 제안 내용 *", value=st.session_state.user_input.get("solution", ""), height=160)
-            inputs["effect"] = st.text_area("기대 효과 *", value=st.session_state.user_input.get("effect", ""), height=120)
-            inputs["resources"] = st.text_area("필요 자원 / 실행 계획", value=st.session_state.user_input.get("resources", ""), height=100)
+            inputs["background"] = st.text_area(
+                "제안 배경 / 문제 정의 *",
+                value=st.session_state.user_input.get("background", ""),
+                height=140,
+                placeholder="예: 내부 보고자료 작성에 반복 작업이 많고 형식 정리가 오래 걸림",
+            )
+            inputs["solution"] = st.text_area(
+                "핵심 제안 내용 *",
+                value=st.session_state.user_input.get("solution", ""),
+                height=160,
+                placeholder="예: 템플릿 기반 AI PPT 생성 도구를 도입해 기획부터 초안까지 자동화",
+            )
+            inputs["effect"] = st.text_area(
+                "기대 효과 *",
+                value=st.session_state.user_input.get("effect", ""),
+                height=120,
+                placeholder="예: 문서 작성 시간 단축, 보고 품질 표준화, 협업 속도 향상",
+            )
+            inputs["resources"] = st.text_area(
+                "필요 자원 / 실행 계획",
+                value=st.session_state.user_input.get("resources", ""),
+                height=100,
+                placeholder="예: 2주 MVP 개발, 디자인 검토 1회, 실사용자 파일 샘플 확보",
+            )
             required = ["background", "solution", "effect"]
         elif template == "data_report":
             inputs["title"] = st.text_input("분석 제목 *", value=st.session_state.user_input.get("title", ""), placeholder="예: 2026 Q1 고객 VOC 분석 결과")
-            inputs["background"] = st.text_area("분석 배경 및 목적 *", value=st.session_state.user_input.get("background", ""), height=120)
+            inputs["background"] = st.text_area(
+                "분석 배경 및 목적 *",
+                value=st.session_state.user_input.get("background", ""),
+                height=120,
+                placeholder="예: 최근 3개월 VOC를 요약해 주요 이슈와 개선 우선순위를 보고",
+            )
             uploaded = st.file_uploader("데이터 파일 업로드 (CSV / JSON)", type=list(SUPPORTED_UPLOAD_TYPES))
             if uploaded:
                 try:
                     uploaded_summary = parse_uploaded_file(uploaded)
                     st.session_state.uploaded_data = uploaded_summary
                     inputs["uploaded_file_name"] = uploaded.name
-                    st.success(
-                        f"{uploaded.name} 업로드 완료 | 행 수: {uploaded_summary['rows']} | 컬럼: {', '.join(uploaded_summary['columns']) or '없음'}"
-                    )
+                    st.success(f"{uploaded.name} 업로드 완료 | 행 수: {uploaded_summary['rows']} | 컬럼: {', '.join(uploaded_summary['columns']) or '없음'}")
                 except Exception as exc:
                     st.session_state.uploaded_data = None
                     st.error(f"파일을 읽지 못했습니다: {exc}")
-            inputs["direction"] = st.text_area("분석 방향 / 보고 포인트", value=st.session_state.user_input.get("direction", ""), height=120)
+            inputs["direction"] = st.text_area(
+                "분석 방향 / 보고 포인트",
+                value=st.session_state.user_input.get("direction", ""),
+                height=120,
+                placeholder="예: 불만 유형 Top 3, 월별 추이, 즉시 조치 가능한 개선안 중심으로 정리",
+            )
             required = ["title", "background"]
         else:
             st.error("지원하지 않는 템플릿입니다.")
@@ -343,12 +350,7 @@ def render_step_2() -> None:
     with right:
         render_common_brief_inputs(inputs)
         st.info(
-            "팁: 긴 본문을 다 넣어도 됩니다.\n\n"
-            "- 꼭 들어갈 문장\n"
-            "- 페이지별 원하는 형태\n"
-            "- 강조해야 할 수치\n"
-            "- 특정 페이지 위치 요구\n\n"
-            "같은 내용을 자세히 적어두면 Step 3에서 더 정교하게 다듬기 쉽습니다."
+            "팁: 긴 본문을 다 넣어도 됩니다.\n\n- 꼭 들어갈 문장\n- 페이지별 원하는 형태\n- 강조해야 할 수치\n- 특정 페이지 위치 요구\n\n같은 내용을 자세히 적어두면 Step 3에서 더 정교하게 다듬기 쉽습니다."
         )
 
     left_btn, mid_btn, right_btn = st.columns([1, 1.4, 1])
@@ -379,11 +381,7 @@ def render_step_3() -> None:
         with st.spinner("슬라이드 구조를 기획하는 중입니다..."):
             try:
                 llm = get_default_llm()
-                schema = llm.plan_slides(
-                    user_request=build_user_request(st.session_state.user_input),
-                    template=str(st.session_state.selected_template),
-                    data=st.session_state.uploaded_data,
-                )
+                schema = llm.plan_slides(build_user_request(st.session_state.user_input), str(st.session_state.selected_template), st.session_state.uploaded_data)
                 st.session_state.slide_schema = schema
                 st.session_state.last_error = None
                 st.rerun()
@@ -393,6 +391,7 @@ def render_step_3() -> None:
 
     if st.session_state.slide_schema is None:
         st.error(st.session_state.last_error or "슬라이드 구조 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
+        st.warning("현재 OpenAI 키는 형식상 정상으로 보이지만, 테스트 결과 `insufficient_quota`가 반환되었습니다. OpenAI 플랫폼의 결제/크레딧 상태를 확인해주세요.")
         env_path = os.path.join(os.path.dirname(__file__), ".env")
         if os.path.exists(env_path):
             with open(env_path, encoding="utf-8") as handle:
@@ -416,7 +415,6 @@ def render_step_3() -> None:
 
     schema: SlideSchema = st.session_state.slide_schema
     st.success(f"총 {len(schema.slides)}장의 슬라이드 구성이 준비되었습니다.")
-
     st.subheader("전체 구조 피드백")
     st.session_state.planner_feedback = st.text_area(
         "구조 재생성 지시",
@@ -520,8 +518,7 @@ def render_step_4() -> None:
 def main() -> None:
     init_session()
     render_progress_bar(int(st.session_state.step))
-    render_step_navigation(int(st.session_state.step))
-
+    render_step_navigation()
     step = st.session_state.step
     if step == 1:
         render_step_1()
