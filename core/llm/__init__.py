@@ -1,10 +1,4 @@
-"""LLM provider factory.
-
-우선순위:
-1. LLM_PROVIDER=mock  → MockAdapter (API 키 불필요)
-2. OPENAI_API_KEY 있음 → OpenAIAdapter
-3. 그 외              → MockAdapter (자동 fallback)
-"""
+"""LLM provider factory for PPTAgent."""
 
 from __future__ import annotations
 
@@ -17,31 +11,46 @@ logger = logging.getLogger(__name__)
 
 
 def get_default_llm() -> LLMInterface:
-    """환경변수 기반으로 적절한 LLM 어댑터를 반환한다."""
+    """Return the configured LLM adapter.
 
+    Resolution order:
+    1. `LLM_PROVIDER` explicit selection (`openai` or `mock`)
+    2. If unset and `OPENAI_API_KEY` exists, use OpenAI
+    3. Otherwise fallback to mock for local testing
+    """
     provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    has_openai_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
 
-    # 명시적으로 mock 지정
+    logger.info("Resolving LLM provider | LLM_PROVIDER=%s | has_openai_key=%s", provider or "<unset>", has_openai_key)
+
     if provider == "mock":
-        logger.info("LLM_PROVIDER=mock → MockAdapter 사용")
+        logger.info("Using MockAdapter because LLM_PROVIDER=mock")
         return _get_mock()
 
-    # OpenAI API 키가 있으면 OpenAI 사용
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if api_key and api_key != "your_openai_api_key_here":
-        try:
-            from core.llm.openai import OpenAIAdapter
-            logger.info("OPENAI_API_KEY 감지 → OpenAIAdapter 사용")
-            return OpenAIAdapter()
-        except Exception as exc:
-            logger.warning("OpenAIAdapter 초기화 실패 → Mock으로 fallback | error=%s", exc)
-            return _get_mock()
+    if provider == "openai":
+        logger.info("Using OpenAIAdapter because LLM_PROVIDER=openai")
+        return _get_openai()
 
-    # 키 없으면 자동으로 Mock fallback
-    logger.info("API 키 없음 → MockAdapter로 자동 fallback (테스트 모드)")
+    if provider:
+        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+
+    if has_openai_key:
+        logger.info("Using OpenAIAdapter because OPENAI_API_KEY is configured")
+        return _get_openai()
+
+    logger.warning("No explicit provider and no OPENAI_API_KEY; falling back to MockAdapter")
     return _get_mock()
+
+
+
+def _get_openai() -> LLMInterface:
+    from core.llm.openai import OpenAIAdapter
+
+    return OpenAIAdapter()
+
 
 
 def _get_mock() -> LLMInterface:
     from core.llm.mock_adapter import MockAdapter
+
     return MockAdapter()

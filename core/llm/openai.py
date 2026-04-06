@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 2
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 
 class OpenAIAdapter(LLMInterface):
@@ -33,6 +33,7 @@ class OpenAIAdapter(LLMInterface):
 
         self.client = OpenAI(api_key=api_key)
         self.model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        logger.info("OpenAIAdapter initialized | model=%s", self.model)
 
     def plan_slides(
         self,
@@ -62,16 +63,24 @@ class OpenAIAdapter(LLMInterface):
                     attempt + 1,
                 )
                 return self._parse_response(response.output_text)
-            except AuthenticationError:
+            except AuthenticationError as exc:
+                logger.error("OpenAI authentication failed | error=%s", type(exc).__name__)
                 raise RuntimeError("OpenAI 인증에 실패했습니다. .env의 OPENAI_API_KEY가 올바른지 확인해주세요.")
-            except RateLimitError:
-                logger.warning("OpenAI rate limit | attempt=%s", attempt + 1)
+            except RateLimitError as exc:
+                code = None
+                try:
+                    code = exc.body.get("error", {}).get("code")
+                except Exception:
+                    code = None
+                logger.warning("OpenAI rate/quota issue | code=%s | attempt=%s", code, attempt + 1)
+                if code == "insufficient_quota":
+                    raise RuntimeError("OpenAI API는 연결되었지만 현재 프로젝트의 API 크레딧/한도가 부족합니다. OpenAI 플랫폼의 Billing 또는 Credits 상태를 확인해주세요.")
                 if attempt < MAX_RETRIES:
                     time.sleep(10)
                     continue
-                raise RuntimeError("요청이 많아 잠시 대기 중입니다. 잠시 후 다시 시도해주세요.")
-            except APIConnectionError:
-                logger.warning("OpenAI connection error | attempt=%s", attempt + 1)
+                raise RuntimeError("OpenAI 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요.")
+            except APIConnectionError as exc:
+                logger.warning("OpenAI connection error | attempt=%s | error=%s", attempt + 1, type(exc).__name__)
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY_SECONDS)
                     continue
@@ -81,7 +90,7 @@ class OpenAIAdapter(LLMInterface):
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY_SECONDS)
                     continue
-                raise RuntimeError("슬라이드 구조 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
+                raise RuntimeError(f"OpenAI API 호출이 실패했습니다. status={exc.status_code}")
 
         raise RuntimeError("슬라이드 구조 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
 

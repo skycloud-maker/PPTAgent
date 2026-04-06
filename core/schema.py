@@ -9,8 +9,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SlideType(str, Enum):
-    """Supported slide types defined by the project architecture."""
-
     TITLE = "title"
     SECTION = "section"
     BULLET = "bullet"
@@ -22,8 +20,6 @@ class SlideType(str, Enum):
 
 
 class SlideMeta(BaseModel):
-    """Deck-level metadata."""
-
     title: str
     template: str = "company-internal"
     language: str = "ko"
@@ -31,8 +27,6 @@ class SlideMeta(BaseModel):
 
 
 class SlideContent(BaseModel):
-    """Flexible content payload used by the renderer."""
-
     model_config = {"extra": "allow"}
 
     heading: str | None = None
@@ -51,8 +45,6 @@ class SlideContent(BaseModel):
 
 
 class Slide(BaseModel):
-    """A single slide in the generated plan."""
-
     index: int = Field(ge=1)
     type: SlideType
     content: SlideContent
@@ -66,8 +58,6 @@ class Slide(BaseModel):
 
 
 class SlideSchema(BaseModel):
-    """Intermediate representation returned by the planner."""
-
     meta: SlideMeta
     slides: list[Slide]
 

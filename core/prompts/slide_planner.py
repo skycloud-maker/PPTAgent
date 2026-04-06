@@ -1,80 +1,79 @@
-"""Prompt builder for the slide-planning LLM call."""
+"""Prompt builder for template-pack-driven executive decks."""
 
 from __future__ import annotations
 
+import json
+
+from core.template_packs import pack_to_prompt_dict
+
 SLIDE_TYPES = ["title", "section", "bullet", "chart", "table", "two_column", "image", "blank"]
 
-SYSTEM_PROMPT = """당신은 회사 내부 보고 자료를 기획하는 발표자료 전문가입니다.
 
-반드시 아래 규칙을 지키세요.
-1. 오직 JSON만 출력하세요. 설명 문장이나 마크다운은 금지합니다.
-2. 첫 번째 슬라이드는 반드시 title 타입입니다.
-3. 전체 슬라이드 수는 5장 이상 12장 이하로 작성합니다.
-4. 슬라이드 타입은 다음 목록에서만 선택합니다: {slide_types}
-5. 결과물은 한국어로 작성합니다.
-6. 내부 보고용 문체로 간결하고 임원 보고에 적합하게 작성합니다.
-7. bullet 슬라이드의 points는 최대 5개까지만 작성합니다.
-8. 필요하면 section 슬라이드로 맥락을 구분합니다.
-9. 회사 전용 템플릿이므로 표지, 핵심 요약, 실행 계획, 리스크를 우선 고려합니다.
-10. 사용자가 긴 본문이나 페이지별 배치 요구를 주면 가능한 한 구조와 슬라이드 타입에 반영합니다.
+SYSTEM_PROMPT = """
+당신은 LG전자 내부 보고자료를 기획하는 수석 프레젠테이션 전략가입니다.
 
-JSON 형식:
-{{
-  "meta": {{
-    "title": "발표 제목",
-    "template": "template-id",
-    "language": "ko",
-    "total_slides": 0
-  }},
-  "slides": [
-    {{
-      "index": 1,
-      "type": "title",
-      "content": {{
-        "title": "발표 제목",
-        "subtitle": "부제 또는 보고 정보",
-        "presenter": "작성자"
-      }}
-    }}
-  ]
-}}"""
+목표:
+- 사용자가 입력한 거친 메모를 임원/조직장 보고 수준의 장표 문구로 재구성합니다.
+- 다만 장표 구조를 마음대로 새로 만들지 말고, 제공된 템플릿 팩의 슬라이드 순서와 타입을 최대한 유지합니다.
+- 사용자는 큰 구조를 바꾸지 않고도 템플릿만으로 높은 완성도를 얻고 싶어 합니다.
+- 당신의 역할은 템플릿 슬롯을 더 적합한 제목, bullet, table, chart, two_column 내용으로 채우는 것입니다.
+
+좋은 보고 장표 기준:
+1. 첫 1~2장은 읽는 즉시 핵심을 파악할 수 있어야 합니다.
+2. 장표마다 메시지가 하나씩만 남아야 합니다.
+3. 단순 작업 나열이 아니라 성과, 의미, 의사결정 포인트가 보여야 합니다.
+4. 제목은 짧고 강하게, 20자 안팎으로 작성합니다.
+5. bullet은 장표용 구/절 위주로 압축합니다.
+6. table은 항목/내용/의미 구조가 드러나야 합니다.
+7. chart는 차트 자체보다 해석 포인트가 중요합니다.
+8. notes에는 상세 설명, 유첨으로 보낼 메모, 강조 지시만 넣습니다.
+9. 결과물에는 사용자의 편집 지시문이나 placeholder 문구를 노출하지 않습니다.
+10. 출력은 반드시 JSON만 제공합니다.
+
+반드시 지킬 것:
+- slide index는 템플릿 팩 순서를 유지합니다.
+- slide type은 템플릿 팩 정의를 우선 따릅니다.
+- 각 slide content는 해당 slide objective와 guidance에 맞게 채웁니다.
+- title slide의 notes에는 내부 편집 메모를 넣지 않습니다.
+""".strip()
 
 
 def build_prompt(user_request: str, template: str, data: dict | None = None) -> str:
-    system_prompt = SYSTEM_PROMPT.format(slide_types=", ".join(SLIDE_TYPES))
-
-    user_sections = [
-        "[프로젝트 컨텍스트]",
-        "- 용도: 회사 내부 발표 자료 작성",
-        f"- 템플릿: {template}",
+    pack = pack_to_prompt_dict(template)
+    sections = [
+        "[SYSTEM]",
+        SYSTEM_PROMPT,
         "",
-        "[사용자 입력]",
+        "[TEMPLATE_PACK]",
+        json.dumps(pack, ensure_ascii=False, indent=2),
+        "",
+        "[ALLOWED_SLIDE_TYPES]",
+        ", ".join(SLIDE_TYPES),
+        "",
+        "[USER_INPUT]",
         user_request,
     ]
 
     if data:
-        columns = ", ".join(data.get("columns", [])) or "없음"
-        user_sections.extend(
+        sections.extend(
             [
                 "",
-                "[업로드 데이터 요약]",
-                f"- 파일명: {data.get('file_name', 'unknown')}",
-                f"- 형식: {data.get('file_type', 'unknown')}",
-                f"- 행 수: {data.get('rows', 0)}",
-                f"- 컬럼: {columns}",
+                "[UPLOADED_DATA_SUMMARY]",
+                json.dumps(data, ensure_ascii=False, indent=2),
             ]
         )
 
-    user_sections.extend(
+    sections.extend(
         [
             "",
-            "[출력 지시]",
-            "- 실제 렌더링 가능한 슬라이드 구조만 JSON으로 작성하세요.",
-            "- 과장된 카피보다 핵심 전달력이 우선입니다.",
-            "- title, bullet, section, two_column 타입을 적극 활용하세요.",
-            "- 긴 참고 본문은 적절히 요약해서 슬라이드 흐름으로 재구성하세요.",
-            "- 페이지별 위치/형태 요구가 있으면 해당 슬라이드의 구조와 타입에 반영하세요.",
+            "[OUTPUT_SCHEMA]",
+            "meta.title에는 실제 보고서 제목을 넣고, slides는 템플릿 팩 slides 길이와 동일하게 유지하세요.",
+            "각 slide.content에는 title/heading/points/data/left_points/right_points/notes 중 필요한 필드만 채우세요.",
+            "table 슬라이드는 data.headers 와 data.rows를 채우세요.",
+            "chart 슬라이드는 data.categories 와 data.series를 채우고, points에는 차트 해석 포인트를 넣으세요.",
+            "two_column 슬라이드는 left_title/right_title/left_points/right_points를 채우세요.",
+            "JSON 외의 설명은 출력하지 마세요.",
         ]
     )
 
-    return f"{system_prompt}\n\n" + "\n".join(user_sections)
+    return "\n".join(sections)

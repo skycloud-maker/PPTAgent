@@ -1,536 +1,591 @@
-"""Streamlit entrypoint for PPTAgent."""
+"""LG-style Streamlit studio for PPTAgent."""
 
 from __future__ import annotations
 
-import csv
-import io
-import json
+import html
 import logging
 import os
 import re
 from typing import Any
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from core.llm import get_default_llm
 from core.renderer import render_pptx
-from core.schema import Slide, SlideSchema
+from core.schema import Slide, SlideContent, SlideMeta, SlideSchema, SlideType
+from core.template_packs import TemplatePack, get_template_pack, list_template_packs
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
-SUPPORTED_UPLOAD_TYPES = ("csv", "json")
+st.set_page_config(page_title="PPTAgent Studio", page_icon="??", layout="wide")
 
-st.set_page_config(page_title="PPTAgent", page_icon="📊", layout="wide")
+COMPANY_NAME = os.getenv("PPTAGENT_COMPANY_NAME", "LG Electronics")
+CONFIDENTIAL_LABEL = os.getenv("PPTAGENT_CONFIDENTIAL_LABEL", "LGE Internal Use Only")
 
-TEMPLATES: list[dict[str, str]] = [
-    {"id": "weekly_report", "icon": "📅", "name": "주간/월간 업무 보고"},
-    {"id": "project_status", "icon": "📌", "name": "프로젝트 현황 보고"},
-    {"id": "proposal", "icon": "📝", "name": "신규 기획안 제안"},
-    {"id": "data_report", "icon": "📈", "name": "데이터 분석 리포트"},
-]
-TEMPLATE_NAMES = {template["id"]: template["name"] for template in TEMPLATES}
+COMMON_FIELDS = {
+    "department": ("Department / Org", "e.g. HS Division Customer Value Innovation Team"),
+    "role": ("Author Role", "e.g. Manager / Part Lead / PM"),
+    "audience": ("Audience", "e.g. Executive / Org Leader / Related Dept."),
+    "objective": ("Report Objective", "e.g. Share this week's result and next week's support request"),
+    "reference_material": ("Long Notes / Meeting Memo / Source Text", "Paste meeting notes, email drafts, or long source text here."),
+    "layout_preferences": ("Preferred Layout / Emphasis", "e.g. Page 2 summary, Page 3 table, final page request items"),
+}
+
+PACK_FIELDS = {
+    "weekly_exec": [
+        ("period", "Report Period *", "e.g. 2026 Apr W1 (03.30 ~ 04.05)"),
+        ("done", "Completed Work *", "e.g.\n- MVP architecture complete\n- Streamlit wizard UI done\n- LG renderer reflected"),
+        ("plan", "Next Plan *", "e.g.\n- OpenAI quality test\n- Internal beta\n- Template sample expansion"),
+        ("issues", "Issues / Requests", "e.g.\n- API budget review\n- Need more internal slide samples"),
+    ],
+    "project_exec": [
+        ("project_name", "Project Name *", "e.g. PPTAgent"),
+        ("goal", "Project Goal *", "e.g.\n- Reduce report lead time\n- Standardize internal reporting"),
+        ("progress", "Progress *", "e.g.\n- UI complete\n- Renderer upgrade in progress\n- AI refinement logic designed"),
+        ("risks", "Risks / Requests", "e.g.\n- Need more slide samples\n- Need budget / access review"),
+    ],
+    "proposal_exec": [
+        ("background", "Background / Problem *", "e.g.\n- Repetitive reporting work is heavy\n- Deck quality varies by person"),
+        ("solution", "Proposed Solution *", "e.g.\n- Company template platform + AI refinement agent"),
+        ("effect", "Expected Impact *", "e.g.\n- Reduce creation time\n- Improve executive reporting quality"),
+        ("resources", "Execution / Needed Resource", "e.g.\n- MVP upgrade\n- Gather template samples\n- Beta operation"),
+    ],
+}
+
+THEME_PRESETS = {
+    "LGE Core": {"primary": "#A50034", "secondary": "#2C3142", "accent": "#D9DEE8", "text": "#202532", "muted": "#6B7280", "surface": "#F7F8FB", "background": "#FFFFFF", "support": "#0E7A53", "border": "#D9DEE6"},
+    "LGE Executive": {"primary": "#A50034", "secondary": "#4D5566", "accent": "#E9ECF2", "text": "#1F2937", "muted": "#7B8394", "surface": "#FBFBFC", "background": "#FFFFFF", "support": "#1B7F6B", "border": "#E3E7EE"},
+    "LGE Data": {"primary": "#A50034", "secondary": "#1E3A5F", "accent": "#E8EDF6", "text": "#18212F", "muted": "#667085", "surface": "#F5F7FA", "background": "#FFFFFF", "support": "#0E7A53", "border": "#D6DCE6"},
+}
+
+COLOR_FIELDS = [("primary", "Primary"), ("secondary", "Secondary"), ("accent", "Accent"), ("background", "Background"), ("surface", "Card"), ("text", "Text"), ("muted", "Muted"), ("support", "Support"), ("border", "Border")]
 
 
-def init_session() -> None:
+def inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .stApp { background: linear-gradient(180deg, #f6f7fa 0%, #eef1f5 100%); }
+        .block-container { max-width: 1700px; padding-top: 1rem; padding-bottom: 2.5rem; }
+        .lg-shell { background: rgba(255,255,255,.92); border: 1px solid #dde2ea; border-radius: 28px; box-shadow: 0 16px 48px rgba(17,24,39,.06); overflow: hidden; margin-bottom: 1rem; }
+        .lg-topline { height: 6px; background: #a50034; }
+        .lg-header { padding: 18px 28px 20px; background: linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%); }
+        .lg-eyebrow { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: #7b8394; margin-bottom: .45rem; }
+        .lg-title { font-size: 2.05rem; font-weight: 800; color: #202532; margin-bottom: .35rem; }
+        .lg-copy { font-size: .95rem; line-height: 1.65; color: #596273; max-width: 1050px; }
+        .panel { background: rgba(255,255,255,.96); border: 1px solid #dde2ea; border-radius: 24px; padding: 18px; box-shadow: 0 10px 26px rgba(17,24,39,.04); margin-bottom: 1rem; }
+        .panel-title { font-size: 1.02rem; font-weight: 800; color: #202532; margin-bottom: .2rem; }
+        .panel-copy { font-size: .88rem; line-height: 1.6; color: #6b7280; margin-bottom: .9rem; }
+        .kicker { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #f8ebf0; color: #a50034; font-size: .75rem; font-weight: 700; margin-bottom: .6rem; }
+        .metric { border: 1px solid #e3e7ee; border-radius: 18px; padding: 12px 14px; background: #fbfbfc; margin-bottom: .7rem; }
+        .metric-label { font-size: .74rem; color: #7b8394; text-transform: uppercase; letter-spacing: .06em; }
+        .metric-value { font-size: 1.08rem; font-weight: 800; color: #202532; margin-top: .18rem; }
+        .pack-card { border: 1px solid #dfe4ec; border-radius: 22px; background: linear-gradient(180deg, #fff 0%, #fbfbfc 100%); padding: 18px; height: 100%; }
+        .pack-card-top { height: 4px; border-radius: 999px; background: #a50034; margin-bottom: 14px; }
+        .preview-frame { background: #eef1f5; border: 1px solid #dde2ea; border-radius: 26px; padding: 18px; }
+        .slide-meta { display: inline-flex; padding: 6px 12px; border-radius: 999px; background: #f3f4f6; color: #4b5563; font-size: .76rem; font-weight: 700; margin-bottom: .75rem; }
+        .helper { font-size: .82rem; line-height: 1.6; color: #6b7280; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def init_state() -> None:
     defaults = {
         "step": 1,
-        "selected_template": None,
-        "user_input": {},
-        "uploaded_data": None,
+        "selected_pack_id": "weekly_exec",
+        "brief": {},
         "slide_schema": None,
-        "last_error": None,
-        "planner_feedback": "",
-        "slide_feedbacks": {},
+        "selected_slide_idx": 1,
+        "selected_block": "All Slide",
+        "block_instruction": "",
+        "theme_preset": "LGE Core",
+        "theme": dict(THEME_PRESETS["LGE Core"]),
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
-def reset_flow() -> None:
-    for key in [
-        "step",
-        "selected_template",
-        "user_input",
-        "uploaded_data",
-        "slide_schema",
-        "last_error",
-        "planner_feedback",
-        "slide_feedbacks",
-    ]:
-        st.session_state.pop(key, None)
-
-
-def go_to_step(step: int, *, clear_schema: bool = False) -> None:
-    if clear_schema:
-        st.session_state.slide_schema = None
-        st.session_state.last_error = None
+def go_to_step(step: int) -> None:
     st.session_state.step = step
     st.rerun()
 
 
-def render_progress_bar(current_step: int) -> None:
-    labels = ["1. 템플릿 선택", "2. 내용 입력", "3. 구조 확인", "4. 완료"]
-    cols = st.columns(len(labels))
-    for index, (col, label) in enumerate(zip(cols, labels), start=1):
-        with col:
-            if index < current_step:
-                st.markdown(f"✅ ~~{label}~~")
-            elif index == current_step:
-                st.markdown(f"**▶ {label}**")
-            else:
-                st.markdown(label)
-    st.divider()
+def current_theme() -> dict[str, str]:
+    theme = dict(THEME_PRESETS["LGE Core"])
+    theme.update(st.session_state.get("theme", {}))
+    return theme
 
 
-def render_step_navigation() -> None:
-    st.caption("단계 이동")
-    cols = st.columns(4)
-    steps = [(1, "템플릿"), (2, "내용 입력"), (3, "구조 확인"), (4, "완료")]
-    for col, (step_no, label) in zip(cols, steps):
-        with col:
-            disabled = False
-            if step_no == 2 and not st.session_state.selected_template:
-                disabled = True
-            if step_no >= 3 and not st.session_state.user_input:
-                disabled = True
-            if step_no == 4 and st.session_state.slide_schema is None:
-                disabled = True
-            if st.button(label, key=f"nav_{step_no}", use_container_width=True, disabled=disabled):
-                go_to_step(step_no, clear_schema=step_no <= 2)
+def sync_theme_from_preset() -> None:
+    st.session_state.theme = dict(THEME_PRESETS.get(st.session_state.get("theme_preset", "LGE Core"), THEME_PRESETS["LGE Core"]))
 
-
-def parse_uploaded_file(uploaded_file: Any) -> dict[str, Any] | None:
-    if uploaded_file is None:
-        return None
-    if uploaded_file.size and uploaded_file.size > MAX_UPLOAD_SIZE_BYTES:
-        raise ValueError("업로드 파일은 10MB 이하만 지원합니다.")
-
-    suffix = uploaded_file.name.rsplit(".", 1)[-1].lower()
-    raw = uploaded_file.getvalue()
-
-    if suffix == "json":
-        payload = json.loads(raw.decode("utf-8"))
-        if isinstance(payload, list) and payload:
-            first = payload[0]
-            columns = list(first.keys()) if isinstance(first, dict) else []
-            rows = len(payload)
-        elif isinstance(payload, dict):
-            columns = list(payload.keys())
-            rows = 1
-        else:
-            columns = []
-            rows = 0
-        return {"file_name": uploaded_file.name, "file_type": "json", "rows": rows, "columns": columns[:20]}
-
-    if suffix == "csv":
-        text = raw.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(text))
-        fieldnames = reader.fieldnames or []
-        rows = sum(1 for _ in reader)
-        return {"file_name": uploaded_file.name, "file_type": "csv", "rows": rows, "columns": fieldnames[:20]}
-
-    raise ValueError(f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(SUPPORTED_UPLOAD_TYPES)}")
-
-
-def build_user_request(user_input: dict[str, Any]) -> str:
-    labels = {
-        "period": "보고 기간",
-        "done": "완료 업무",
-        "plan": "다음 계획",
-        "issues": "이슈 및 특이사항",
-        "project_name": "프로젝트명",
-        "goal": "프로젝트 목표",
-        "progress": "진행 현황",
-        "risks": "리스크 및 대응",
-        "background": "배경 및 문제 정의",
-        "solution": "핵심 제안 내용",
-        "effect": "기대 효과",
-        "resources": "필요 자원 및 실행 계획",
-        "title": "분석 제목",
-        "direction": "분석 방향",
-        "reference_material": "참고용 긴 본문 또는 자료",
-        "layout_preferences": "형태 및 배치 요구사항",
-    }
-    parts: list[str] = []
-    for key, value in user_input.items():
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        parts.append(f"[{labels.get(key, key)}]\n{value}")
-
-    if st.session_state.planner_feedback.strip():
-        parts.append(f"[구조 재생성 지시]\n{st.session_state.planner_feedback.strip()}")
-
-    per_slide = []
-    for slide_index in sorted(st.session_state.slide_feedbacks):
-        feedback = st.session_state.slide_feedbacks[slide_index].strip()
+def build_request(pack: TemplatePack) -> str:
+    lines = [f"[template_pack]\n{pack.name}"]
+    for key, value in st.session_state.brief.items():
+        value_str = str(value).strip()
+        if value_str:
+            lines.append(f"[{key}]\n{value_str}")
+    for slide in get_schema(pack).slides:
+        feedback_key = f"slide_feedback_{slide.index}"
+        feedback = str(st.session_state.get(feedback_key, "")).strip()
         if feedback:
-            per_slide.append(f"- 슬라이드 {slide_index}: {feedback}")
-    if per_slide:
-        parts.append("[슬라이드별 수정 지시]\n" + "\n".join(per_slide))
-
-    return "\n\n".join(parts)
+            lines.append(f"[slide_{slide.index}_feedback]\n{feedback}")
+    lines.append(f"[theme]\n{current_theme()}")
+    return "\n\n".join(lines)
 
 
-def get_layout_hint(slide: Slide) -> str:
-    mapping = {
-        "title": "상단 배너 + 중앙 제목 + 하단 발표자",
-        "section": "좌측 컬러 패널 + 섹션 제목",
-        "bullet": "상단 제목 + 본문 불릿 목록",
-        "chart": "상단 제목 + 중앙 차트 영역",
-        "table": "상단 제목 + 중앙 표 영역",
-        "two_column": "상단 제목 + 좌우 2단 비교",
-        "image": "상단 제목 + 중앙 이미지 영역",
-        "blank": "빈 슬라이드",
-    }
-    return mapping.get(slide.type.value, slide.type.value)
-
-
-def render_wireframe(slide: Slide) -> None:
-    slide_type = slide.type.value
-    if slide_type == "title":
-        html = "<div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;overflow:hidden'><div style='height:24%;background:#a50034'></div><div style='padding:20px 24px'><div style='height:28px;background:#ececec;border-radius:6px;width:72%;margin-bottom:16px'></div><div style='height:16px;background:#f2f2f2;border-radius:6px;width:48%;margin-bottom:50px'></div><div style='height:12px;background:#f2f2f2;border-radius:6px;width:22%;margin-left:auto'></div></div></div>"
-    elif slide_type == "section":
-        html = "<div style='display:flex;border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;overflow:hidden'><div style='width:34%;background:#a50034'></div><div style='flex:1;padding:28px'><div style='height:24px;background:#ececec;border-radius:6px;width:58%;margin-top:65px'></div></div></div>"
-    elif slide_type == "two_column":
-        html = "<div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;padding:18px'><div style='height:20px;background:#ececec;border-radius:6px;width:34%;margin-bottom:18px'></div><div style='display:flex;height:150px'><div style='flex:1;background:#fafafa;border-radius:8px'></div><div style='width:8px'></div><div style='width:1px;background:#d9d9d9'></div><div style='width:8px'></div><div style='flex:1;background:#fafafa;border-radius:8px'></div></div></div>"
-    else:
-        html = "<div style='border:1px solid #d9d9d9;border-radius:12px;background:#fff;height:220px;padding:18px'><div style='height:20px;background:#ececec;border-radius:6px;width:34%;margin-bottom:18px'></div><div style='height:148px;background:#fafafa;border-radius:10px'></div></div>"
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def render_step_1() -> None:
-    st.title("어떤 내부 발표 자료를 만들까요?")
-    st.caption("현재 MVP는 회사 전용 보고/기획 템플릿 생성을 우선 지원합니다.")
-
-    cols = st.columns(2)
-    for index, template in enumerate(TEMPLATES):
-        with cols[index % 2]:
-            selected = st.session_state.selected_template == template["id"]
-            if st.button(f"{template['icon']} {template['name']}", key=f"template_{template['id']}", type="primary" if selected else "secondary", use_container_width=True):
-                st.session_state.selected_template = template["id"]
-                st.rerun()
-
-    _, right = st.columns([3, 1])
-    with right:
-        if st.button("다음 >", type="primary", use_container_width=True):
-            if not st.session_state.selected_template:
-                st.error("템플릿을 먼저 선택해주세요.")
-            else:
-                go_to_step(2)
-
-
-def render_common_brief_inputs(inputs: dict[str, Any]) -> None:
-    st.subheader("추가 브리프")
-    st.caption("긴 본문이나 세부 오더가 많을수록 여기에서 충분히 설명해주세요.")
-    inputs["reference_material"] = st.text_area(
-        "참고할 긴 본문 / 회의 메모 / 복붙할 재료",
-        height=220,
-        value=st.session_state.user_input.get("reference_material", ""),
-        placeholder="예: 회의록 전문, 메일 요약, 기존 보고서 본문, 반드시 들어가야 하는 문장 등",
-    )
-    inputs["layout_preferences"] = st.text_area(
-        "원하는 형태 / 배치 / 강조 방식",
-        height=140,
-        value=st.session_state.user_input.get("layout_preferences", ""),
-        placeholder="예: 2페이지는 좌우 비교형, 3페이지는 핵심 수치만 크게, 마지막은 일정표 형태",
-    )
-
-
-def render_step_2() -> None:
-    template = st.session_state.selected_template
-    st.title("내용을 입력해주세요")
-    st.caption(f"선택한 템플릿: {TEMPLATE_NAMES.get(template, template)}")
-
-    inputs: dict[str, Any] = {}
-    left, right = st.columns([1.2, 1])
-
-    with left:
-        if template == "weekly_report":
-            inputs["period"] = st.text_input("보고 기간 *", value=st.session_state.user_input.get("period", ""), placeholder="예: 2026년 4월 1주차")
-            inputs["done"] = st.text_area(
-                "이번 기간 주요 업무 *",
-                value=st.session_state.user_input.get("done", ""),
-                height=160,
-                placeholder="예:\n- VoC 대시보드 구조 정리\n- 발표자료 초안 작성\n- 내부 검토 의견 반영",
-            )
-            inputs["plan"] = st.text_area(
-                "다음 기간 계획 *",
-                value=st.session_state.user_input.get("plan", ""),
-                height=140,
-                placeholder="예:\n- UI 수정안 반영\n- 템플릿 고도화\n- 사용자 피드백 수집",
-            )
-            inputs["issues"] = st.text_area(
-                "이슈 / 특이사항",
-                value=st.session_state.user_input.get("issues", ""),
-                height=120,
-                placeholder="예: API 비용 이슈, 브랜드 템플릿 원본 부재, 일정 지연 가능성",
-            )
-            required = ["period", "done", "plan"]
-        elif template == "project_status":
-            inputs["project_name"] = st.text_input("프로젝트명 *", value=st.session_state.user_input.get("project_name", ""), placeholder="예: PPTAgent")
-            inputs["period"] = st.text_input("프로젝트 기간 *", value=st.session_state.user_input.get("period", ""), placeholder="예: 2026.04 ~ 2026.06")
-            inputs["goal"] = st.text_area(
-                "프로젝트 목표 *",
-                value=st.session_state.user_input.get("goal", ""),
-                height=120,
-                placeholder="예: 회사 내부 발표자료 제작 시간을 줄이는 AI Agent MVP 구축",
-            )
-            inputs["progress"] = st.text_area(
-                "현재 진행 현황 *",
-                value=st.session_state.user_input.get("progress", ""),
-                height=160,
-                placeholder="예:\n- Step 기반 UI 연결 완료\n- OpenAI 연동 전환 진행 중\n- 렌더러 회사 전용 테마 반영",
-            )
-            inputs["risks"] = st.text_area(
-                "리스크 / 대응 계획",
-                value=st.session_state.user_input.get("risks", ""),
-                height=120,
-                placeholder="예: API 크레딧 부족 가능성, 실제 사용자 요구 반영 필요",
-            )
-            required = ["project_name", "period", "goal", "progress"]
-        elif template == "proposal":
-            inputs["background"] = st.text_area(
-                "제안 배경 / 문제 정의 *",
-                value=st.session_state.user_input.get("background", ""),
-                height=140,
-                placeholder="예: 내부 보고자료 작성에 반복 작업이 많고 형식 정리가 오래 걸림",
-            )
-            inputs["solution"] = st.text_area(
-                "핵심 제안 내용 *",
-                value=st.session_state.user_input.get("solution", ""),
-                height=160,
-                placeholder="예: 템플릿 기반 AI PPT 생성 도구를 도입해 기획부터 초안까지 자동화",
-            )
-            inputs["effect"] = st.text_area(
-                "기대 효과 *",
-                value=st.session_state.user_input.get("effect", ""),
-                height=120,
-                placeholder="예: 문서 작성 시간 단축, 보고 품질 표준화, 협업 속도 향상",
-            )
-            inputs["resources"] = st.text_area(
-                "필요 자원 / 실행 계획",
-                value=st.session_state.user_input.get("resources", ""),
-                height=100,
-                placeholder="예: 2주 MVP 개발, 디자인 검토 1회, 실사용자 파일 샘플 확보",
-            )
-            required = ["background", "solution", "effect"]
-        elif template == "data_report":
-            inputs["title"] = st.text_input("분석 제목 *", value=st.session_state.user_input.get("title", ""), placeholder="예: 2026 Q1 고객 VOC 분석 결과")
-            inputs["background"] = st.text_area(
-                "분석 배경 및 목적 *",
-                value=st.session_state.user_input.get("background", ""),
-                height=120,
-                placeholder="예: 최근 3개월 VOC를 요약해 주요 이슈와 개선 우선순위를 보고",
-            )
-            uploaded = st.file_uploader("데이터 파일 업로드 (CSV / JSON)", type=list(SUPPORTED_UPLOAD_TYPES))
-            if uploaded:
-                try:
-                    uploaded_summary = parse_uploaded_file(uploaded)
-                    st.session_state.uploaded_data = uploaded_summary
-                    inputs["uploaded_file_name"] = uploaded.name
-                    st.success(f"{uploaded.name} 업로드 완료 | 행 수: {uploaded_summary['rows']} | 컬럼: {', '.join(uploaded_summary['columns']) or '없음'}")
-                except Exception as exc:
-                    st.session_state.uploaded_data = None
-                    st.error(f"파일을 읽지 못했습니다: {exc}")
-            inputs["direction"] = st.text_area(
-                "분석 방향 / 보고 포인트",
-                value=st.session_state.user_input.get("direction", ""),
-                height=120,
-                placeholder="예: 불만 유형 Top 3, 월별 추이, 즉시 조치 가능한 개선안 중심으로 정리",
-            )
-            required = ["title", "background"]
-        else:
-            st.error("지원하지 않는 템플릿입니다.")
-            required = []
-
-    with right:
-        render_common_brief_inputs(inputs)
-        st.info(
-            "팁: 긴 본문을 다 넣어도 됩니다.\n\n- 꼭 들어갈 문장\n- 페이지별 원하는 형태\n- 강조해야 할 수치\n- 특정 페이지 위치 요구\n\n같은 내용을 자세히 적어두면 Step 3에서 더 정교하게 다듬기 쉽습니다."
+def bootstrap_schema(pack: TemplatePack) -> SlideSchema:
+    slides = []
+    for idx, blueprint in enumerate(pack.slides, start=1):
+        content = SlideContent(
+            heading=blueprint.title,
+            title=blueprint.title,
+            subtitle=blueprint.objective if idx == 1 else None,
+            caption=blueprint.guidance if idx == 1 else None,
+            points=[blueprint.objective, blueprint.guidance],
+            notes=blueprint.guidance,
+            left_title="Plan",
+            right_title="Risk / Support",
+            left_points=["Key item 1", "Key item 2"],
+            right_points=["Support item 1", "Risk item 2"],
+            data={"headers": ["Category", "Main Point", "Meaning"], "rows": [["Item", blueprint.objective, "Meaning"]], "categories": ["Plan", "Build", "Test", "Share"], "series": [{"name": "Progress", "values": [35, 55, 72, 88]}]},
         )
-
-    left_btn, mid_btn, right_btn = st.columns([1, 1.4, 1])
-    with left_btn:
-        if st.button("< 템플릿으로", use_container_width=True):
-            go_to_step(1, clear_schema=True)
-    with mid_btn:
-        if st.button("입력 내용 임시 저장", use_container_width=True):
-            st.session_state.user_input = inputs
-            st.success("현재 입력 내용을 유지했습니다.")
-    with right_btn:
-        if st.button("구조 생성으로 >", type="primary", use_container_width=True):
-            missing = [field for field in required if not str(inputs.get(field, "")).strip()]
-            if missing:
-                st.error("필수 입력 항목을 모두 채워주세요.")
-            else:
-                st.session_state.user_input = inputs
-                st.session_state.slide_schema = None
-                st.session_state.last_error = None
-                go_to_step(3)
+        slides.append(Slide(index=idx, type=SlideType(blueprint.type), content=content))
+    return SlideSchema(meta=SlideMeta(title=pack.name, template=pack.id, language="ko", total_slides=len(slides)), slides=slides)
 
 
-def render_step_3() -> None:
-    st.title("슬라이드 구조를 확인해주세요")
-    st.caption("구조를 먼저 만들고, 각 슬라이드에 구체적인 수정 지시를 추가로 줄 수 있습니다.")
+def get_schema(pack: TemplatePack) -> SlideSchema:
+    schema = st.session_state.slide_schema
+    if isinstance(schema, SlideSchema) and schema.slides:
+        for idx, slide in enumerate(schema.slides, start=1):
+            slide.index = idx
+        schema.meta.total_slides = len(schema.slides)
+        return schema
+    schema = bootstrap_schema(pack)
+    st.session_state.slide_schema = schema
+    return schema
 
-    if st.session_state.slide_schema is None:
-        with st.spinner("슬라이드 구조를 기획하는 중입니다..."):
-            try:
-                llm = get_default_llm()
-                schema = llm.plan_slides(build_user_request(st.session_state.user_input), str(st.session_state.selected_template), st.session_state.uploaded_data)
-                st.session_state.slide_schema = schema
-                st.session_state.last_error = None
+
+def table_to_text(data: dict[str, Any] | None) -> str:
+    data = data or {}
+    headers = data.get("headers") or ["Category", "Main Point", "Meaning"]
+    rows = data.get("rows") or []
+    lines = [" | ".join(str(item) for item in headers)]
+    for row in rows:
+        lines.append(" | ".join(str(item) for item in row))
+    return "\n".join(lines)
+
+
+def chart_to_text(data: dict[str, Any] | None) -> str:
+    data = data or {}
+    categories = data.get("categories") or ["Plan", "Build", "Test", "Share"]
+    series = data.get("series") or [{"name": "Progress", "values": [40, 60, 75, 88]}]
+    if not series:
+        return ""
+    return f"categories: {', '.join(str(item) for item in categories)}\nvalues: {', '.join(str(v) for v in series[0].get('values', []))}"
+
+
+def ensure_slide_state(slide: Slide) -> None:
+    prefix = f"slide_{slide.index}"
+    defaults = {
+        f"{prefix}_type": slide.type.value,
+        f"{prefix}_title": slide.content.title or slide.content.heading or "",
+        f"{prefix}_points": "\n".join(slide.content.points or []),
+        f"{prefix}_notes": slide.content.notes or "",
+        f"{prefix}_left_title": slide.content.left_title or "Plan",
+        f"{prefix}_right_title": slide.content.right_title or "Risk / Support",
+        f"{prefix}_left_points": "\n".join(slide.content.left_points or []),
+        f"{prefix}_right_points": "\n".join(slide.content.right_points or []),
+        f"{prefix}_table": table_to_text(slide.content.data),
+        f"{prefix}_chart": chart_to_text(slide.content.data),
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def parse_lines(text: str) -> list[str]:
+    return [line.strip().lstrip('-? ') for line in text.splitlines() if line.strip().lstrip('-? ')]
+
+
+def parse_table_text(text: str) -> dict[str, Any]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return {"headers": ["Category", "Main Point", "Meaning"], "rows": []}
+    headers = [item.strip() for item in lines[0].split("|")]
+    rows = [[item.strip() for item in line.split("|")] for line in lines[1:]]
+    return {"headers": headers, "rows": rows}
+
+
+def parse_chart_text(text: str) -> dict[str, Any]:
+    categories = ["Plan", "Build", "Test", "Share"]
+    values = [40, 60, 75, 88]
+    for line in text.splitlines():
+        lower = line.lower().strip()
+        if lower.startswith("categories:"):
+            categories = [item.strip() for item in line.split(":", 1)[1].split(",") if item.strip()]
+        if lower.startswith("values:"):
+            parsed = []
+            for item in [item.strip() for item in line.split(":", 1)[1].split(",") if item.strip()]:
+                try:
+                    parsed.append(int(float(item)))
+                except ValueError:
+                    pass
+            if parsed:
+                values = parsed
+    return {"categories": categories, "series": [{"name": "Progress", "values": values}]}
+
+
+def apply_manual_edits(schema: SlideSchema) -> SlideSchema:
+    for idx, slide in enumerate(schema.slides, start=1):
+        slide.index = idx
+        ensure_slide_state(slide)
+        prefix = f"slide_{slide.index}"
+        slide.type = SlideType(st.session_state.get(f"{prefix}_type", slide.type.value))
+        title = str(st.session_state.get(f"{prefix}_title", "")).strip()
+        points = parse_lines(str(st.session_state.get(f"{prefix}_points", "")))
+        notes = str(st.session_state.get(f"{prefix}_notes", "")).strip()
+        slide.content.title = title
+        slide.content.heading = title
+        slide.content.points = points
+        slide.content.notes = notes
+        if slide.type == SlideType.TITLE:
+            slide.content.subtitle = points[0] if points else slide.content.subtitle
+            slide.content.caption = notes or slide.content.caption
+        if slide.type == SlideType.TWO_COLUMN:
+            slide.content.left_title = str(st.session_state.get(f"{prefix}_left_title", "Plan")).strip() or "Plan"
+            slide.content.right_title = str(st.session_state.get(f"{prefix}_right_title", "Risk / Support")).strip() or "Risk / Support"
+            slide.content.left_points = parse_lines(str(st.session_state.get(f"{prefix}_left_points", "")))
+            slide.content.right_points = parse_lines(str(st.session_state.get(f"{prefix}_right_points", "")))
+        if slide.type == SlideType.TABLE:
+            slide.content.data = parse_table_text(str(st.session_state.get(f"{prefix}_table", "")))
+        if slide.type == SlideType.CHART:
+            slide.content.data = parse_chart_text(str(st.session_state.get(f"{prefix}_chart", "")))
+    schema.meta.total_slides = len(schema.slides)
+    st.session_state.slide_schema = schema
+    return schema
+
+
+def block_options(slide: Slide) -> list[str]:
+    if slide.type == SlideType.TITLE:
+        return ["All Slide", "Title", "Subtitle", "Message"]
+    if slide.type == SlideType.TABLE:
+        return ["All Slide", "Title", "Table", "Summary"]
+    if slide.type == SlideType.CHART:
+        return ["All Slide", "Title", "Chart", "Insight"]
+    if slide.type == SlideType.TWO_COLUMN:
+        return ["All Slide", "Title", "Left Column", "Right Column"]
+    return ["All Slide", "Title", "Message", "Secondary"]
+
+
+def highlight_style(name: str, selected: str, color: str) -> str:
+    return f"box-shadow: inset 0 0 0 2px {color};" if name == selected else ""
+
+def preview_html(slide: Slide, theme: dict[str, str], selected_block: str) -> str:
+    primary = theme["primary"]
+    secondary = theme["secondary"]
+    text = theme["text"]
+    muted = theme["muted"]
+    surface = theme["surface"]
+    background = theme["background"]
+    border = theme["border"]
+
+    def esc(value: str | None, fallback: str = "") -> str:
+        return html.escape(value or fallback)
+
+    title = esc(slide.content.title or slide.content.heading, "Slide Title")
+    if slide.type == SlideType.TITLE:
+        points = "".join(f"<li style='margin-bottom:10px'>{esc(point)}</li>" for point in (slide.content.points or [])[:3])
+        return f"""
+        <div style='position:relative;background:{background};border:1px solid {border};border-radius:18px;aspect-ratio:16/9;padding:26px 34px;overflow:hidden'>
+          <div style='position:absolute;left:0;top:0;width:100%;height:6px;background:{primary}'></div>
+          <div style='position:absolute;left:0;top:64px;width:14px;height:112px;background:{primary}'></div>
+          <div style='position:absolute;left:0;top:168px;width:64px;height:12px;background:{primary}'></div>
+          <div style='position:absolute;right:0;bottom:0;width:120px;height:12px;background:{primary}'></div>
+          <div style='position:absolute;left:50%;top:18px;transform:translateX(-50%);font-size:11px;color:{muted};font-family:Arial Narrow'>{esc(CONFIDENTIAL_LABEL)}</div>
+          <div style='font-size:12px;color:{primary};font-weight:700;line-height:1.7;{highlight_style("Secondary", selected_block, primary)}'>{esc(slide.content.caption, 'Internal executive reporting deck')}</div>
+          <div style='margin-top:72px;font-size:42px;font-weight:800;line-height:1.18;color:{secondary};{highlight_style("Title", selected_block, primary)}'>{title}</div>
+          <div style='margin-top:18px;font-size:18px;color:{text};{highlight_style("Subtitle", selected_block, primary)}'>{esc(slide.content.subtitle, 'Report title and key message')}</div>
+          <div style='margin-top:28px;font-size:15px;color:{text};{highlight_style("Message", selected_block, primary)}'><ul style='padding-left:24px;margin:0'>{points}</ul></div>
+          <div style='position:absolute;left:78px;bottom:38px;font-size:13px;font-weight:700;color:{secondary}'>{esc(COMPANY_NAME)}</div>
+          <div style='position:absolute;left:50%;bottom:10px;transform:translateX(-50%);font-size:10px;font-weight:700;color:{primary};font-family:Arial Narrow'>| CONFIDENTIAL |</div>
+        </div>
+        """
+    if slide.type == SlideType.TABLE:
+        data = slide.content.data or {}
+        headers = data.get("headers") or ["Category", "Main Point", "Meaning"]
+        rows = data.get("rows") or [["Item", "Content", "Meaning"]]
+        head = "".join(f"<div style='padding:11px 12px;background:#eef1f5;font-weight:700;font-size:13px;color:{secondary}'>{esc(str(item))}</div>" for item in headers)
+        body = ""
+        for row in rows[:5]:
+            cells = row + [""] * max(0, len(headers) - len(row))
+            body += "".join(f"<div style='padding:12px;border-top:1px solid {border};font-size:12px;color:{text};background:{background}'>{esc(str(cell))}</div>" for cell in cells[:len(headers)])
+        cols = " ".join(["1fr"] * len(headers))
+        return f"<div style='position:relative;background:{background};border:1px solid {border};border-radius:18px;aspect-ratio:16/9;padding:22px 26px'><div style='position:absolute;left:50%;top:14px;transform:translateX(-50%);font-size:11px;color:{muted};font-family:Arial Narrow'>{esc(CONFIDENTIAL_LABEL)}</div><div style='margin-top:16px;font-size:29px;font-weight:800;color:{text};{highlight_style("Title", selected_block, primary)}'>{title}</div><div style='height:2px;background:{secondary};margin:8px 0 18px'></div><div style='display:grid;grid-template-columns:{cols};border:1px solid {border};border-radius:12px;overflow:hidden;{highlight_style("Table", selected_block, primary)}'>{head}{body}</div></div>"
+    if slide.type == SlideType.TWO_COLUMN:
+        left_points = "".join(f"<li style='margin-bottom:8px'>{esc(point)}</li>" for point in (slide.content.left_points or [])[:5])
+        right_points = "".join(f"<li style='margin-bottom:8px'>{esc(point)}</li>" for point in (slide.content.right_points or [])[:5])
+        return f"<div style='position:relative;background:{background};border:1px solid {border};border-radius:18px;aspect-ratio:16/9;padding:22px 26px'><div style='position:absolute;left:50%;top:14px;transform:translateX(-50%);font-size:11px;color:{muted};font-family:Arial Narrow'>{esc(CONFIDENTIAL_LABEL)}</div><div style='margin-top:16px;font-size:29px;font-weight:800;color:{text};{highlight_style("Title", selected_block, primary)}'>{title}</div><div style='height:2px;background:{secondary};margin:8px 0 18px'></div><div style='display:grid;grid-template-columns:1fr 1fr;gap:18px'><div style='border:1px solid {border};border-radius:14px;padding:16px;background:{background};{highlight_style("Left Column", selected_block, primary)}'><div style='font-size:15px;font-weight:800;color:{primary};margin-bottom:10px'>{esc(slide.content.left_title, 'Left')}</div><ul style='padding-left:20px;margin:0;color:{text};font-size:13px;line-height:1.65'>{left_points}</ul></div><div style='border:1px solid {border};border-radius:14px;padding:16px;background:{surface};{highlight_style("Right Column", selected_block, primary)}'><div style='font-size:15px;font-weight:800;color:{primary};margin-bottom:10px'>{esc(slide.content.right_title, 'Right')}</div><ul style='padding-left:20px;margin:0;color:{text};font-size:13px;line-height:1.65'>{right_points}</ul></div></div></div>"
+    if slide.type == SlideType.CHART:
+        data = slide.content.data or {}
+        categories = data.get("categories") or ["Plan", "Build", "Test", "Share"]
+        values = (data.get("series") or [{"values": [40, 60, 75, 88]}])[0].get("values") or [40, 60, 75, 88]
+        bars = "".join(f"<div style='display:flex;flex-direction:column;align-items:center;gap:8px'><div style='width:54px;height:{max(28, int(v)*2)}px;background:{primary if i % 2 else secondary};border-radius:10px 10px 0 0'></div><div style='font-size:12px;color:{muted}'>{esc(str(categories[i]))}</div></div>" for i, v in enumerate(values[: min(len(categories), len(values), 4)]))
+        insights = "".join(f"<li style='margin-bottom:8px'>{esc(point)}</li>" for point in (slide.content.points or [])[:4])
+        return f"<div style='position:relative;background:{background};border:1px solid {border};border-radius:18px;aspect-ratio:16/9;padding:22px 26px'><div style='position:absolute;left:50%;top:14px;transform:translateX(-50%);font-size:11px;color:{muted};font-family:Arial Narrow'>{esc(CONFIDENTIAL_LABEL)}</div><div style='margin-top:16px;font-size:29px;font-weight:800;color:{text};{highlight_style("Title", selected_block, primary)}'>{title}</div><div style='height:2px;background:{secondary};margin:8px 0 18px'></div><div style='display:grid;grid-template-columns:1.35fr .9fr;gap:18px'><div style='border:1px solid {border};border-radius:14px;padding:20px;background:{background};{highlight_style("Chart", selected_block, primary)}'><div style='display:flex;align-items:end;justify-content:space-around;min-height:230px'>{bars}</div></div><div style='border:1px solid {border};border-radius:14px;padding:16px;background:{surface};{highlight_style("Insight", selected_block, primary)}'><div style='font-size:15px;font-weight:800;color:{primary};margin-bottom:10px'>Insights</div><ul style='padding-left:20px;margin:0;color:{text};font-size:13px;line-height:1.65'>{insights}</ul></div></div></div>"
+    points = "".join(f"<li style='margin-bottom:10px'>{esc(point)}</li>" for point in (slide.content.points or [])[:6])
+    return f"<div style='position:relative;background:{background};border:1px solid {border};border-radius:18px;aspect-ratio:16/9;padding:22px 26px'><div style='position:absolute;left:50%;top:14px;transform:translateX(-50%);font-size:11px;color:{muted};font-family:Arial Narrow'>{esc(CONFIDENTIAL_LABEL)}</div><div style='margin-top:16px;font-size:29px;font-weight:800;color:{text};{highlight_style("Title", selected_block, primary)}'>{title}</div><div style='height:2px;background:{secondary};margin:8px 0 18px'></div><div style='border:1px solid {border};border-radius:14px;padding:18px;background:{surface};{highlight_style("Message", selected_block, primary)}'><ul style='padding-left:22px;margin:0;color:{text};font-size:14px;line-height:1.75'>{points}</ul></div></div>"
+
+
+def pack_completion_ratio(pack: TemplatePack) -> str:
+    required = len(pack.required_fields)
+    if not required:
+        return "100%"
+    completed = sum(1 for key in pack.required_fields if str(st.session_state.brief.get(key, "")).strip())
+    return f"{round((completed / required) * 100)}%"
+
+
+def render_header(title: str, copy: str) -> None:
+    st.markdown(f"<div class='lg-shell'><div class='lg-topline'></div><div class='lg-header'><div class='lg-eyebrow'>{html.escape(CONFIDENTIAL_LABEL)}</div><div class='lg-title'>{html.escape(title)}</div><div class='lg-copy'>{html.escape(copy)}</div></div></div>", unsafe_allow_html=True)
+
+def render_pack_picker() -> None:
+    render_header("PPTAgent Studio", "LG internal reporting workspace. Stable template structure plus AI refinement for faster, better reporting.")
+    st.title("Choose Report Pack")
+    cols = st.columns(3, gap="large")
+    for idx, pack in enumerate(list_template_packs()):
+        with cols[idx % 3]:
+            st.markdown("<div class='pack-card'><div class='pack-card-top'></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='kicker'>{pack.icon} {pack.name}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='panel-copy'>{pack.summary}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='helper'><strong>Best for</strong><br>{pack.recommended_for}</div>", unsafe_allow_html=True)
+            if st.button("Start with this pack", key=f"pick_pack_{pack.id}", use_container_width=True, type="primary" if st.session_state.selected_pack_id == pack.id else "secondary"):
+                st.session_state.selected_pack_id = pack.id
+                st.session_state.slide_schema = bootstrap_schema(pack)
+                st.session_state.selected_slide_idx = 1
                 st.rerun()
-            except Exception as exc:
-                logger.exception("Failed to plan slides")
-                st.session_state.last_error = str(exc)
-
-    if st.session_state.slide_schema is None:
-        st.error(st.session_state.last_error or "슬라이드 구조 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
-        st.warning("현재 OpenAI 키는 형식상 정상으로 보이지만, 테스트 결과 `insufficient_quota`가 반환되었습니다. OpenAI 플랫폼의 결제/크레딧 상태를 확인해주세요.")
-        env_path = os.path.join(os.path.dirname(__file__), ".env")
-        if os.path.exists(env_path):
-            with open(env_path, encoding="utf-8") as handle:
-                env_text = handle.read()
-            if "your_openai_api_key_here" in env_text:
-                st.info("현재 .env에 예시 API 키가 들어 있습니다. 실제 OpenAI API 키로 바꿔야 Step 3이 동작합니다.")
-
-        nav_left, nav_mid, nav_right = st.columns([1, 1, 1])
-        with nav_left:
-            if st.button("< 내용 입력으로", use_container_width=True):
-                go_to_step(2)
-        with nav_mid:
-            if st.button("< 템플릿 선택으로", use_container_width=True):
-                go_to_step(1, clear_schema=True)
-        with nav_right:
-            if st.button("다시 시도", use_container_width=True):
-                st.session_state.slide_schema = None
-                st.session_state.last_error = None
-                st.rerun()
-        return
-
-    schema: SlideSchema = st.session_state.slide_schema
-    st.success(f"총 {len(schema.slides)}장의 슬라이드 구성이 준비되었습니다.")
-    st.subheader("전체 구조 피드백")
-    st.session_state.planner_feedback = st.text_area(
-        "구조 재생성 지시",
-        value=st.session_state.planner_feedback,
-        height=120,
-        placeholder="예: 3페이지는 표 대신 좌우 비교형으로, 마지막 페이지는 실행 일정으로 바꿔줘",
-    )
-
-    for slide in schema.slides:
-        title = slide.content.title or slide.content.heading or "(제목 없음)"
-        with st.container(border=True):
-            left, right = st.columns([1, 1.2])
-            with left:
-                st.markdown(f"**{slide.index}. {title}**")
-                st.caption(f"타입: `{slide.type.value}` | 기본 레이아웃: {get_layout_hint(slide)}")
-                render_wireframe(slide)
-            with right:
-                st.markdown("**현재 내용 요약**")
-                if slide.content.points:
-                    for point in slide.content.points[:5]:
-                        st.write(f"- {point}")
-                else:
-                    compact = []
-                    for field in ["subtitle", "presenter", "notes", "left_title", "right_title"]:
-                        value = getattr(slide.content, field, None)
-                        if value:
-                            compact.append(f"- {field}: {value}")
-                    st.write("\n".join(compact) if compact else "요약 가능한 본문이 아직 많지 않습니다.")
-
-                st.session_state.slide_feedbacks[slide.index] = st.text_area(
-                    "이 슬라이드에 대한 구체적 오더",
-                    key=f"slide_feedback_{slide.index}",
-                    value=st.session_state.slide_feedbacks.get(slide.index, ""),
-                    height=100,
-                    placeholder="예: 제목은 더 짧게, 좌측에는 배경 / 우측에는 기대효과, 숫자는 크게 강조",
-                )
-
-    left_btn, mid_btn, right_btn = st.columns([1, 1.4, 1])
-    with left_btn:
-        if st.button("< 내용 입력 수정", use_container_width=True):
-            go_to_step(2)
-    with mid_btn:
-        if st.button("이 피드백으로 구조 다시 생성", use_container_width=True):
-            st.session_state.slide_schema = None
-            st.session_state.last_error = None
-            st.rerun()
-    with right_btn:
-        if st.button("PPT 생성으로 >", type="primary", use_container_width=True):
-            go_to_step(4)
-
-
-def render_step_4() -> None:
-    st.title("발표 자료가 준비되었습니다")
-    schema: SlideSchema | None = st.session_state.slide_schema
-    if schema is None:
-        st.error("생성할 슬라이드 구조가 없습니다. 이전 단계로 돌아가 다시 시도해주세요.")
-        left, right = st.columns(2)
-        with left:
-            if st.button("< 구조 확인으로", use_container_width=True):
-                go_to_step(3)
-        with right:
-            if st.button("< 내용 입력으로", use_container_width=True):
-                go_to_step(2)
-        return
-
-    with st.spinner("발표 자료 파일을 생성하는 중입니다..."):
-        try:
-            pptx_bytes = render_pptx(schema)
-        except Exception as exc:
-            logger.exception("Failed to render PPTX")
-            st.error(f"PPTX 파일 생성에 실패했습니다. 잠시 후 다시 시도해주세요.\n\n오류: {exc}")
-            left, right = st.columns(2)
-            with left:
-                if st.button("< 구조 확인으로", use_container_width=True):
-                    go_to_step(3)
-            with right:
-                if st.button("< 내용 입력으로", use_container_width=True):
-                    go_to_step(2)
-            return
-
-    safe_title = re.sub(r'[\\/:*?"<>|]+', "_", str(schema.meta.title or "PPTAgent"))
-    st.download_button(
-        label="PPTX 다운로드",
-        data=pptx_bytes,
-        file_name=f"{safe_title}.pptx",
-        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        type="primary",
-        use_container_width=True,
-    )
-
-    left, right = st.columns(2)
-    with left:
-        if st.button("< 구조 다시 보기", use_container_width=True):
-            go_to_step(3)
+            st.markdown("</div>", unsafe_allow_html=True)
+    _, right = st.columns([4, 1])
     with right:
-        if st.button("새 발표 자료 만들기", use_container_width=True):
-            reset_flow()
+        if st.button("Open Studio >", key="goto_studio", use_container_width=True, type="primary"):
+            go_to_step(2)
+
+
+def render_studio() -> None:
+    pack = get_template_pack(st.session_state.selected_pack_id)
+    schema = apply_manual_edits(get_schema(pack))
+    selected_idx = min(max(1, st.session_state.selected_slide_idx), len(schema.slides))
+    st.session_state.selected_slide_idx = selected_idx
+    selected_slide = schema.slides[selected_idx - 1]
+    ensure_slide_state(selected_slide)
+
+    render_header("AI Studio", "Live briefing, preview, targeted AI refinement, and theme control in one screen. Visual language tuned toward LG internal reporting decks.")
+
+    t1, t2, t3, t4 = st.columns(4, gap="small")
+    with t1:
+        if st.button("Generate / Refresh", key="toolbar_generate", use_container_width=True, type="primary"):
+            missing = [field for field in pack.required_fields if not str(st.session_state.brief.get(field, "")).strip()]
+            if missing:
+                st.error("Please fill the required brief fields first.")
+            else:
+                try:
+                    generated = get_default_llm().plan_slides(build_request(pack), pack.id, None)
+                    st.session_state.slide_schema = apply_manual_edits(generated)
+                    st.rerun()
+                except Exception as exc:
+                    logger.exception("Failed to generate AI draft")
+                    st.error(str(exc))
+    with t2:
+        if st.button("Refine Selected Area", key="toolbar_refine", use_container_width=True):
+            instruction = st.session_state.block_instruction.strip()
+            if not instruction:
+                st.warning("Add an instruction first.")
+            else:
+                feedback_key = f"slide_feedback_{selected_slide.index}"
+                prev = str(st.session_state.get(feedback_key, "")).strip()
+                scoped = f"[{st.session_state.selected_block}] {instruction}"
+                st.session_state[feedback_key] = scoped if not prev else prev + "\n" + scoped
+                try:
+                    generated = get_default_llm().plan_slides(build_request(pack), pack.id, None)
+                    st.session_state.slide_schema = apply_manual_edits(generated)
+                    st.rerun()
+                except Exception as exc:
+                    logger.exception("Failed to refine AI draft")
+                    st.error(str(exc))
+    with t3:
+        if st.button("Apply Manual Edit", key="toolbar_save", use_container_width=True):
+            st.session_state.slide_schema = apply_manual_edits(schema)
+            st.success("Current edit applied.")
+    with t4:
+        if st.button("Export >", key="toolbar_download", use_container_width=True):
+            st.session_state.slide_schema = apply_manual_edits(schema)
+            go_to_step(3)
+
+    left, center, right = st.columns([0.95, 1.35, 1.05], gap="large")
+
+    with left:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-title'>Brief Builder</div><div class='panel-copy'>Template stays fixed. Fill content fast and let AI reshape wording inside the template.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric'><div class='metric-label'>Selected Pack</div><div class='metric-value'>{pack.name}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric'><div class='metric-label'>Required Brief</div><div class='metric-value'>{pack_completion_ratio(pack)}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric'><div class='metric-label'>Slides</div><div class='metric-value'>{len(schema.slides)}</div></div>", unsafe_allow_html=True)
+        for key, (label, placeholder) in COMMON_FIELDS.items():
+            widget_key = f"brief_{key}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = str(st.session_state.brief.get(key, ""))
+            st.text_area(label, key=widget_key, placeholder=placeholder, height=96 if key in {"reference_material", "layout_preferences"} else 74)
+            st.session_state.brief[key] = st.session_state.get(widget_key, "")
+        for key, label, placeholder in PACK_FIELDS.get(pack.id, []):
+            widget_key = f"brief_{key}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = str(st.session_state.brief.get(key, ""))
+            st.text_area(label, key=widget_key, placeholder=placeholder, height=118)
+            st.session_state.brief[key] = st.session_state.get(widget_key, "")
+        st.markdown("<div class='panel-title'>Theme Studio</div><div class='panel-copy'>The selected palette applies to preview and exported PPT at the same time.</div>", unsafe_allow_html=True)
+        st.selectbox("Theme Preset", options=list(THEME_PRESETS.keys()), key="theme_preset", on_change=sync_theme_from_preset)
+        theme = current_theme()
+        color_cols = st.columns(2, gap="small")
+        for idx, (field, label) in enumerate(COLOR_FIELDS):
+            with color_cols[idx % 2]:
+                picker_key = f"theme_{field}"
+                if picker_key not in st.session_state:
+                    st.session_state[picker_key] = theme[field]
+                st.color_picker(label, key=picker_key)
+                st.session_state.theme[field] = st.session_state.get(picker_key, theme[field])
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with center:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-title'>Live Slide Preview</div><div class='panel-copy'>Preview updates instantly as you edit. You can validate the look before exporting PPT.</div>", unsafe_allow_html=True)
+        nav1, nav2, nav3 = st.columns([1.0, 2.2, 1.0], gap="small")
+        with nav1:
+            if st.button("< Prev", key="nav_prev", use_container_width=True, disabled=selected_idx == 1):
+                st.session_state.selected_slide_idx = selected_idx - 1
+                st.rerun()
+        with nav2:
+            options = [f"{slide.index}. {slide.content.title or slide.content.heading or slide.type.value}" for slide in schema.slides]
+            labels_to_idx = {label: i + 1 for i, label in enumerate(options)}
+            picked = st.selectbox("Slide", options=options, index=selected_idx - 1, key="slide_picker", label_visibility="collapsed")
+            picked_idx = labels_to_idx[picked]
+            if picked_idx != selected_idx:
+                st.session_state.selected_slide_idx = picked_idx
+                st.rerun()
+        with nav3:
+            if st.button("Next >", key="nav_next", use_container_width=True, disabled=selected_idx == len(schema.slides)):
+                st.session_state.selected_slide_idx = selected_idx + 1
+                st.rerun()
+        st.markdown(f"<div class='slide-meta'>Slide {selected_slide.index} ? {selected_slide.type.value}</div>", unsafe_allow_html=True)
+        st.markdown("<div class='preview-frame'>", unsafe_allow_html=True)
+        st.markdown(preview_html(selected_slide, current_theme(), st.session_state.selected_block), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.caption("Live fields: title, key points, table/chart data, left-right columns, theme palette")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with right:
+        st.markdown("<div class='panel'>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-title'>Inspector</div><div class='panel-copy'>Fine tune the current slide manually or ask AI to rewrite only the selected block.</div>", unsafe_allow_html=True)
+        move1, move2, move3 = st.columns(3, gap="small")
+        with move1:
+            if st.button("Up", key=f"move_up_{selected_idx}", use_container_width=True, disabled=selected_idx == 1):
+                schema.slides[selected_idx - 2], schema.slides[selected_idx - 1] = schema.slides[selected_idx - 1], schema.slides[selected_idx - 2]
+                st.session_state.slide_schema = apply_manual_edits(schema)
+                st.session_state.selected_slide_idx = selected_idx - 1
+                st.rerun()
+        with move2:
+            if st.button("Down", key=f"move_down_{selected_idx}", use_container_width=True, disabled=selected_idx == len(schema.slides)):
+                schema.slides[selected_idx - 1], schema.slides[selected_idx] = schema.slides[selected_idx], schema.slides[selected_idx - 1]
+                st.session_state.slide_schema = apply_manual_edits(schema)
+                st.session_state.selected_slide_idx = selected_idx + 1
+                st.rerun()
+        with move3:
+            if st.button("Delete", key=f"delete_slide_{selected_idx}", use_container_width=True, disabled=len(schema.slides) <= 1):
+                schema.slides.pop(selected_idx - 1)
+                for idx, slide in enumerate(schema.slides, start=1):
+                    slide.index = idx
+                st.session_state.slide_schema = apply_manual_edits(schema)
+                st.session_state.selected_slide_idx = max(1, min(selected_idx, len(schema.slides)))
+                st.rerun()
+        prefix = f"slide_{selected_slide.index}"
+        st.selectbox("Slide Type", options=[item.value for item in SlideType], key=f"{prefix}_type")
+        st.text_input("Slide Title", key=f"{prefix}_title")
+        st.selectbox("AI Target", options=block_options(selected_slide), key="selected_block")
+        st.text_area("Key Points", key=f"{prefix}_points", height=130, placeholder="Write one point per line.")
+        st.text_area("Notes / Direction", key=f"{prefix}_notes", height=82, placeholder="Add emphasis, placement direction, appendix note, or detail.")
+        current_type = SlideType(st.session_state.get(f"{prefix}_type", selected_slide.type.value))
+        if current_type == SlideType.TWO_COLUMN:
+            st.text_input("Left Title", key=f"{prefix}_left_title")
+            st.text_area("Left Column", key=f"{prefix}_left_points", height=92, placeholder="One line per item")
+            st.text_input("Right Title", key=f"{prefix}_right_title")
+            st.text_area("Right Column", key=f"{prefix}_right_points", height=92, placeholder="One line per item")
+        if current_type == SlideType.TABLE:
+            st.text_area("Table Data", key=f"{prefix}_table", height=150, placeholder="Header row first, then one row per line. Example: Category | Main Point | Meaning")
+        if current_type == SlideType.CHART:
+            st.text_area("Chart Data", key=f"{prefix}_chart", height=110, placeholder="categories: Plan, Build, Test, Share\nvalues: 40, 60, 75, 88")
+        st.text_area("Instruction for This Slide", key="block_instruction", height=92, placeholder="Example: Keep the right column focused only on support requests.")
+        st.markdown("<div class='panel-title'>Add New Slide</div>", unsafe_allow_html=True)
+        add1, add2 = st.columns([1.0, 1.3], gap="small")
+        with add1:
+            new_type = st.selectbox("New Type", options=[item.value for item in SlideType], key="new_slide_type")
+        with add2:
+            new_title = st.text_input("New Slide Title", key="new_slide_title", placeholder="Example: Operating Direction / Risk Control / Appendix")
+        if st.button("Add Slide", key="add_slide", use_container_width=True):
+            new_slide = Slide(index=len(schema.slides) + 1, type=SlideType(new_type), content=SlideContent(title=new_title or "New Slide", heading=new_title or "New Slide", points=["Add key point here", "Use AI refine if needed"], left_title="Plan", right_title="Risk / Support", left_points=["Left point"], right_points=["Right point"], data={"headers": ["Category", "Main Point", "Meaning"], "rows": [["Item", "Content", "Meaning"]], "categories": ["A", "B", "C", "D"], "series": [{"name": "Progress", "values": [35, 50, 70, 90]}]}))
+            schema.slides.append(new_slide)
+            st.session_state.slide_schema = apply_manual_edits(schema)
+            st.session_state.selected_slide_idx = len(schema.slides)
             st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    foot1, foot2 = st.columns(2, gap="small")
+    with foot1:
+        if st.button("< Back to Pack", key="footer_back_pack", use_container_width=True):
+            go_to_step(1)
+    with foot2:
+        if st.button("Reset Draft", key="footer_reset_schema", use_container_width=True):
+            st.session_state.slide_schema = bootstrap_schema(pack)
+            st.session_state.selected_slide_idx = 1
+            st.rerun()
+
+
+def render_download() -> None:
+    pack = get_template_pack(st.session_state.selected_pack_id)
+    schema = apply_manual_edits(get_schema(pack))
+    theme = current_theme()
+    render_header("Export Deck", "Export the current structure and theme directly into PPT.")
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-title'>Final Export</div><div class='panel-copy'>Review the current structure and download the PPT file.</div>", unsafe_allow_html=True)
+    st.write(f"Selected Pack: {pack.name}")
+    st.write(f"Slides: {len(schema.slides)}")
+    st.write(f"Theme: {st.session_state.theme_preset}")
+    ppt_bytes = render_pptx(schema, theme=theme)
+    filename = re.sub(r"[^0-9A-Za-z?-?._()\- ]+", "_", schema.meta.title or pack.name).strip() or "pptagent_deck"
+    if not filename.lower().endswith(".pptx"):
+        filename += ".pptx"
+    st.download_button("Download PPT", data=ppt_bytes, file_name=filename, mime="application/vnd.openxmlformats-officedocument.presentationml.presentation", use_container_width=True, type="primary", key="download_ppt_file")
+    b1, b2 = st.columns(2, gap="small")
+    with b1:
+        if st.button("< Back to Studio", key="download_back_studio", use_container_width=True):
+            go_to_step(2)
+    with b2:
+        if st.button("Change Pack", key="download_back_pack", use_container_width=True):
+            go_to_step(1)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main() -> None:
-    init_session()
-    render_progress_bar(int(st.session_state.step))
-    render_step_navigation()
-    step = st.session_state.step
-    if step == 1:
-        render_step_1()
-    elif step == 2:
-        render_step_2()
-    elif step == 3:
-        render_step_3()
-    elif step == 4:
-        render_step_4()
+    inject_styles()
+    init_state()
+    if st.session_state.step == 1:
+        render_pack_picker()
+    elif st.session_state.step == 2:
+        render_studio()
     else:
-        reset_flow()
-        st.rerun()
+        render_download()
 
 
 if __name__ == "__main__":
