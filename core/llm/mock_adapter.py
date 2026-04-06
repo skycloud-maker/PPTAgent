@@ -1,99 +1,206 @@
-"""Mock LLM provider - API 키 없이 테스트용 슬라이드 스키마를 반환한다."""
+"""Mock LLM adapter — API 키 없이 테스트용 슬라이드 스키마를 반환한다.
+
+사용자가 입력한 실제 내용을 슬라이드에 반영한다.
+"""
 
 from __future__ import annotations
 
 import logging
 
 from core.llm.interface import LLMInterface
-from core.schema import SlideContent, SlideMeta, SlideSchema, SlideType, Slide
+from core.schema import Slide, SlideContent, SlideMeta, SlideSchema, SlideType
 
 logger = logging.getLogger(__name__)
 
-# 템플릿별 Mock 데이터
-_MOCK_DATA: dict[str, dict] = {
-    "weekly_report": {
-        "meta_title": "주간 업무 보고",
-        "slides": [
-            {"type": SlideType.TITLE, "content": {"title": "주간 업무 보고", "subtitle": "작성자 | 날짜", "presenter": "담당팀"}},
-            {"type": SlideType.BULLET, "content": {"heading": "이번 주 주요 업무", "points": ["주요 업무 항목 1", "주요 업무 항목 2", "주요 업무 항목 3"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "다음 주 계획", "points": ["계획 항목 1", "계획 항목 2", "계획 항목 3"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "이슈 / 특이사항", "points": ["이슈 항목 1", "이슈 항목 2"]}},
-        ],
-    },
-    "project_status": {
-        "meta_title": "프로젝트 현황 보고",
-        "slides": [
-            {"type": SlideType.TITLE, "content": {"title": "프로젝트 현황 보고", "subtitle": "프로젝트명 | 기간", "presenter": "담당팀"}},
-            {"type": SlideType.BULLET, "content": {"heading": "프로젝트 개요", "points": ["목표: 프로젝트 목표 요약", "기간: 시작일 ~ 종료일", "담당: 팀/담당자"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "진행 현황", "points": ["완료: 완료된 주요 항목", "진행 중: 현재 진행 항목", "예정: 다음 단계 항목"]}},
-            {"type": SlideType.TWO_COLUMN, "content": {"heading": "리스크 & 대응방안", "left_title": "리스크", "right_title": "대응방안", "left_points": ["리스크 항목 1", "리스크 항목 2"], "right_points": ["대응 방안 1", "대응 방안 2"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "다음 단계", "points": ["다음 단계 항목 1", "다음 단계 항목 2"]}},
-        ],
-    },
-    "proposal": {
-        "meta_title": "신규 기획안 제안",
-        "slides": [
-            {"type": SlideType.TITLE, "content": {"title": "신규 기획안 제안", "subtitle": "제안 배경 및 목적", "presenter": "제안팀"}},
-            {"type": SlideType.BULLET, "content": {"heading": "제안 배경 / 문제 정의", "points": ["현황 및 문제점 1", "현황 및 문제점 2", "해결이 필요한 이유"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "핵심 제안 내용", "points": ["제안 내용 1", "제안 내용 2", "제안 내용 3"]}},
-            {"type": SlideType.TWO_COLUMN, "content": {"heading": "기대 효과", "left_title": "정량적 효과", "right_title": "정성적 효과", "left_points": ["효과 항목 1", "효과 항목 2"], "right_points": ["효과 항목 1", "효과 항목 2"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "실행 계획", "points": ["1단계: 계획 항목", "2단계: 계획 항목", "3단계: 계획 항목"]}},
-        ],
-    },
-    "data_report": {
-        "meta_title": "데이터 분석 리포트",
-        "slides": [
-            {"type": SlideType.TITLE, "content": {"title": "데이터 분석 리포트", "subtitle": "분석 기간 | 담당팀", "presenter": "분석팀"}},
-            {"type": SlideType.BULLET, "content": {"heading": "분석 배경 및 목적", "points": ["분석 배경 항목 1", "분석 배경 항목 2", "분석 목적"]}},
-            {"type": SlideType.CHART, "content": {"heading": "주요 지표 현황", "caption": "데이터 기준: 분석 기간"}},
-            {"type": SlideType.BULLET, "content": {"heading": "핵심 인사이트", "points": ["인사이트 1", "인사이트 2", "인사이트 3"]}},
-            {"type": SlideType.BULLET, "content": {"heading": "개선 방향", "points": ["개선 방향 1", "개선 방향 2", "개선 방향 3"]}},
-        ],
-    },
-}
-
-_DEFAULT_MOCK = {
-    "meta_title": "발표 자료",
-    "slides": [
-        {"type": SlideType.TITLE, "content": {"title": "발표 자료", "subtitle": "내부 공유용", "presenter": "작성팀"}},
-        {"type": SlideType.BULLET, "content": {"heading": "주요 내용", "points": ["항목 1", "항목 2", "항목 3"]}},
-        {"type": SlideType.BULLET, "content": {"heading": "결론 및 다음 단계", "points": ["결론 1", "결론 2"]}},
-    ],
-}
-
 
 class MockAdapter(LLMInterface):
-    """
-    API 키 없이 테스트용으로 사용하는 Mock LLM 어댑터.
-    실제 LLM 호출 없이 템플릿별 샘플 SlideSchema를 반환한다.
-    """
+    """API 키 없이 테스트용으로 사용하는 Mock LLM 어댑터."""
 
-    def plan_slides(
-        self,
-        user_request: str,
-        template: str,
-        data: dict | None = None,
-    ) -> SlideSchema:
-        logger.info("Mock 모드로 슬라이드 구조 생성 | template=%s", template)
+    def plan_slides(self, user_request: str, template: str, data: dict | None = None) -> SlideSchema:
+        logger.info("Mock 모드 슬라이드 생성 | template=%s", template)
+        fields = self._parse_fields(user_request)
 
-        mock = _MOCK_DATA.get(template, _DEFAULT_MOCK)
+        if template == "weekly_report":
+            return self._build_weekly_report(fields)
+        elif template == "project_status":
+            return self._build_project_status(fields)
+        elif template == "proposal":
+            return self._build_proposal(fields)
+        elif template == "data_report":
+            return self._build_data_report(fields)
+        else:
+            return self._build_generic(fields)
 
-        slides = []
-        for idx, slide_def in enumerate(mock["slides"], start=1):
-            slides.append(
-                Slide(
-                    index=idx,
-                    type=slide_def["type"],
-                    content=SlideContent(**slide_def["content"]),
-                )
-            )
+    def _parse_fields(self, user_request: str) -> dict[str, str]:
+        """user_request에서 [필드명] 섹션을 파싱한다."""
+        fields: dict[str, str] = {}
+        current_key = None
+        current_lines: list[str] = []
+        for line in user_request.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                if current_key:
+                    fields[current_key] = "\n".join(current_lines).strip()
+                current_key = stripped[1:-1]
+                current_lines = []
+            elif current_key:
+                current_lines.append(line)
+        if current_key:
+            fields[current_key] = "\n".join(current_lines).strip()
+        return fields
+
+    def _to_bullets(self, text: str, max_items: int = 5) -> list[str]:
+        """텍스트를 불릿 리스트로 변환"""
+        lines = []
+        for line in text.splitlines():
+            line = line.strip().lstrip("-·•▪·").strip()
+            if line:
+                lines.append(line)
+        return lines[:max_items]
+
+    def _build_weekly_report(self, f: dict) -> SlideSchema:
+        period = f.get("보고 기간", "")
+        done   = f.get("완료 업무", "")
+        plan   = f.get("다음 계획", "")
+        issues = f.get("이슈 및 특이사항", "")
+
+        slides = [
+            Slide(index=1, type=SlideType.TITLE, content=SlideContent(
+                title="주간 업무 보고",
+                subtitle=period or "보고 기간",
+                presenter="담당팀",
+            )),
+            Slide(index=2, type=SlideType.BULLET, content=SlideContent(
+                heading="이번 주 주요 업무",
+                points=self._to_bullets(done) or ["주요 업무 항목을 입력해주세요"],
+            )),
+            Slide(index=3, type=SlideType.BULLET, content=SlideContent(
+                heading="다음 주 계획",
+                points=self._to_bullets(plan) or ["계획 항목을 입력해주세요"],
+            )),
+        ]
+        if issues.strip():
+            slides.append(Slide(index=4, type=SlideType.BULLET, content=SlideContent(
+                heading="이슈 / 특이사항",
+                points=self._to_bullets(issues),
+                caption="※ 이슈별 세부 대응 방안은 유첨 참고",
+            )))
 
         return SlideSchema(
             meta=SlideMeta(
-                title=mock["meta_title"],
-                template=template,
-                language="ko",
-                total_slides=len(slides),
-            ),
-            slides=slides,
-        )
+                title=f"주간 업무 보고 ({period})" if period else "주간 업무 보고",
+                template="weekly_report", language="ko", total_slides=len(slides)),
+            slides=slides)
+
+    def _build_project_status(self, f: dict) -> SlideSchema:
+        name     = f.get("프로젝트명", "프로젝트")
+        period   = f.get("보고 기간", "")
+        goal     = f.get("프로젝트 목표", "")
+        progress = f.get("진행 현황", "")
+        risks    = f.get("리스크 및 대응", "")
+
+        slides = [
+            Slide(index=1, type=SlideType.TITLE, content=SlideContent(
+                title=name,
+                subtitle=f"프로젝트 현황 보고 | {period}" if period else "프로젝트 현황 보고",
+                presenter="담당팀",
+            )),
+            Slide(index=2, type=SlideType.BULLET, content=SlideContent(
+                heading="프로젝트 개요 및 목표",
+                points=self._to_bullets(goal) or ["목표를 입력해주세요"],
+            )),
+            Slide(index=3, type=SlideType.BULLET, content=SlideContent(
+                heading="현재 진행 현황",
+                points=self._to_bullets(progress) or ["진행 현황을 입력해주세요"],
+            )),
+        ]
+        if risks.strip():
+            slides.append(Slide(index=4, type=SlideType.BULLET, content=SlideContent(
+                heading="리스크 및 대응 방안",
+                points=self._to_bullets(risks),
+                caption="※ 세부 대응 계획은 유첨 참고",
+            )))
+
+        return SlideSchema(
+            meta=SlideMeta(title=f"{name} 현황 보고",
+                           template="project_status", language="ko", total_slides=len(slides)),
+            slides=slides)
+
+    def _build_proposal(self, f: dict) -> SlideSchema:
+        background = f.get("제안 배경 / 문제 정의", "") or f.get("배경 및 문제 정의", "")
+        solution   = f.get("핵심 제안 내용", "")
+        effect     = f.get("기대 효과", "")
+        resources  = f.get("필요 자원 및 실행 계획", "")
+
+        slides = [
+            Slide(index=1, type=SlideType.TITLE, content=SlideContent(
+                title="신규 기획안 제안",
+                subtitle=self._to_bullets(background, 1)[0] if background else "제안 개요",
+                presenter="제안팀",
+            )),
+            Slide(index=2, type=SlideType.BULLET, content=SlideContent(
+                heading="제안 배경 / 문제 정의",
+                points=self._to_bullets(background) or ["배경을 입력해주세요"],
+            )),
+            Slide(index=3, type=SlideType.BULLET, content=SlideContent(
+                heading="핵심 제안 내용",
+                points=self._to_bullets(solution) or ["제안 내용을 입력해주세요"],
+            )),
+            Slide(index=4, type=SlideType.BULLET, content=SlideContent(
+                heading="기대 효과",
+                points=self._to_bullets(effect) or ["기대 효과를 입력해주세요"],
+            )),
+        ]
+        if resources.strip():
+            slides.append(Slide(index=5, type=SlideType.BULLET, content=SlideContent(
+                heading="실행 계획",
+                points=self._to_bullets(resources),
+            )))
+
+        return SlideSchema(
+            meta=SlideMeta(title="신규 기획안 제안",
+                           template="proposal", language="ko", total_slides=len(slides)),
+            slides=slides)
+
+    def _build_data_report(self, f: dict) -> SlideSchema:
+        title      = f.get("분석 제목", "데이터 분석 리포트")
+        background = f.get("분석 배경 및 목적", "") or f.get("배경 및 문제 정의", "")
+        direction  = f.get("분석 방향", "")
+
+        slides = [
+            Slide(index=1, type=SlideType.TITLE, content=SlideContent(
+                title=title,
+                subtitle="분석 결과 보고",
+                presenter="분석팀",
+            )),
+            Slide(index=2, type=SlideType.BULLET, content=SlideContent(
+                heading="분석 배경 및 목적",
+                points=self._to_bullets(background) or ["분석 배경을 입력해주세요"],
+            )),
+            Slide(index=3, type=SlideType.CHART, content=SlideContent(
+                heading="주요 지표 현황",
+                caption="※ 데이터 기준 및 출처는 유첨 참고",
+            )),
+        ]
+        if direction.strip():
+            slides.append(Slide(index=4, type=SlideType.BULLET, content=SlideContent(
+                heading="개선 방향",
+                points=self._to_bullets(direction),
+            )))
+
+        return SlideSchema(
+            meta=SlideMeta(title=title,
+                           template="data_report", language="ko", total_slides=len(slides)),
+            slides=slides)
+
+    def _build_generic(self, f: dict) -> SlideSchema:
+        slides = [
+            Slide(index=1, type=SlideType.TITLE, content=SlideContent(
+                title="발표 자료", subtitle="내부 공유용", presenter="작성팀")),
+            Slide(index=2, type=SlideType.BULLET, content=SlideContent(
+                heading="주요 내용", points=["항목 1", "항목 2", "항목 3"])),
+        ]
+        return SlideSchema(
+            meta=SlideMeta(title="발표 자료", template="generic",
+                           language="ko", total_slides=len(slides)),
+            slides=slides)
